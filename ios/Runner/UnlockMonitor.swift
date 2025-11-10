@@ -37,7 +37,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate {
             manager.pausesLocationUpdatesAutomatically = false
             manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
             manager.distanceFilter = kCLDistanceFilterNone // Nhận mọi cập nhật
-            manager.activityType = .automotiveNavigation // Loại hoạt động phù hợp nhất cho vị trí liên tục
+            manager.activityType = .automotiveNavigation // Hoạt động lái xe/theo dõi liên tục
 
             locationManager = manager
         }
@@ -63,8 +63,12 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate {
     // Hàm được gọi khi Màn hình được Mở khóa
     @objc func deviceDidUnlock() {
         
+        // KHẮC PHỤC LỖI BIÊN DỊCH: Khai báo biến trước khi gán
         var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
+        
+        // Bắt đầu Background Task (có thể chạy tối đa khoảng 30 giây)
         backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "handleUnlockNotification") {
+            // Task hết hạn (sau 30s)
             print("Background Task hết hạn.")
             UIApplication.shared.endBackgroundTask(backgroundTaskID)
         }
@@ -74,22 +78,25 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate {
         self.sendDataToFlutter(method: "deviceUnlocked", data: ["time": formatTime(unlockTime)])
         self.sendLocalNotification(message: "Thiết bị vừa được mở khóa lúc \(formatTime(unlockTime))")
 
-        // Kết thúc Background Task sau 1 giây (đủ để gửi thông báo/gọi Flutter)
+        // Kết thúc Background Task sau 1 giây
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { 
              UIApplication.shared.endBackgroundTask(backgroundTaskID)
              print("Background Task kết thúc.")
         }
     }
     
-    // Hàm gửi dữ liệu về Flutter
+    // Hàm gửi dữ liệu về Flutter (ĐÃ SỬA LỖI CASTING)
     private func sendDataToFlutter(method: String, data: [String: Any]) {
         flutterChannel?.invokeMethod(method, arguments: data) { result in
+            
+            // Xử lý kết quả trả về từ Flutter/Dart
             if let error = result as? FlutterError {
                 print("Lỗi gọi Flutter: \(error.message ?? "")")
-            } else if result is FlutterMethodNotImplemented {
-                print("Phương thức Flutter chưa được triển khai.")
+            } else if result is NSNull || result == nil {
+                // Kiểm tra nếu phương thức chưa được triển khai (result thường là nil hoặc NSNull)
+                print("Phương thức Flutter chưa được triển khai hoặc không có kết quả trả về.")
             } else {
-                print("Đã gọi thành công Flutter method: \(method)")
+                print("Đã gọi thành công Flutter method: \(method). Kết quả: \(result ?? "Không có")")
             }
         }
     }
@@ -130,9 +137,6 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate {
             "timestamp": location.timestamp.timeIntervalSince1970 * 1000 // Chuyển sang mili giây
         ]
         self.sendDataToFlutter(method: "newLocationUpdate", data: data)
-
-        // Bạn có thể gửi thông báo cục bộ ở đây nếu cần cảnh báo khi vị trí thay đổi
-        // sendLocalNotification(message: "Vị trí mới: \(location.coordinate.latitude), \(location.coordinate.longitude)")
     }
     
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {

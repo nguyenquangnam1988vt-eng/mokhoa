@@ -1,4 +1,4 @@
-// ios/Runner/AppDelegate.swift (Đã cập nhật)
+// ios/Runner/AppDelegate.swift
 
 import UIKit
 import Flutter
@@ -16,13 +16,13 @@ class AppDelegate: FlutterAppDelegate {
         // BƯỚC 1: Đăng ký các plugin của Flutter
         GeneratedPluginRegistrant.register(with: self)
 
-        // BƯỚC 2: Khởi tạo và Thiết lập Kênh Truyền thông
-        guard let controller = window?.rootViewController as? FlutterViewController else {
-            fatalError("rootViewController is not FlutterViewController")
+        // BƯỚC 2: Khởi tạo và Thiết lập Kênh Truyền thông cho UnlockMonitor
+        // Lấy FlutterViewController để truy cập BinaryMessenger
+        if let controller = window?.rootViewController as? FlutterViewController {
+            UnlockMonitor.shared.setupFlutterChannel(binaryMessenger: controller.binaryMessenger)
         }
-        UnlockMonitor.shared.setupFlutterChannel(binaryMessenger: controller.binaryMessenger)
         
-        // BƯỚC 3: Bắt đầu theo dõi vị trí
+        // BƯỚC 3: Bắt đầu theo dõi vị trí và sự kiện mở khóa
         UnlockMonitor.shared.startMonitoring() 
 
         // BƯỚC 4: Trả về kết quả
