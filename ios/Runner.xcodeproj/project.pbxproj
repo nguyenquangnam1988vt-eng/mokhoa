@@ -14,6 +14,9 @@
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
+		/* BUILD FILE CHO UNLOCKMONITOR.SWIFT (Đã được thêm) */
+        A1B2C3D4E5F67890ABCDABCD /* UnlockMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111111112222222233333333 /* UnlockMonitor.swift */; };
+		/* KẾT THÚC BUILD FILE */
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -55,6 +58,9 @@
 		97C146FD1CF9000F007C117D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		97C147001CF9000F007C117D /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		97C147021CF9000F007C117D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		/* FILE REFERENCE CHO UNLOCKMONITOR.SWIFT (Đã được thêm) */
+        111111112222222233333333 /* UnlockMonitor.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = UnlockMonitor.swift; sourceTree = "<group>"; };
+		/* KẾT THÚC FILE REFERENCE */
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -117,10 +123,13 @@
 				1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */,
 				74858FAE1ED2DC5600515810 /* AppDelegate.swift */,
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
+				// <<< DÒNG MỚI ĐƯỢC CHÈN VÀO ĐÂY >>>
+				111111112222222233333333 /* UnlockMonitor.swift */,
 			);
 			path = Runner;
 			sourceTree = "<group>";
 		};
+		
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -270,6 +279,8 @@
 			files = (
 				74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
 				1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */,
+				// <<< DÒNG MỚI ĐƯỢC CHÈN VÀO ĐÂY >>>
+				A1B2C3D4E5F67890ABCDABCD /* UnlockMonitor.swift in Sources */, 
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
