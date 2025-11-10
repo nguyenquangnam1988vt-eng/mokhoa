@@ -68,7 +68,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
             manager.allowsBackgroundLocationUpdates = true
             manager.pausesLocationUpdatesAutomatically = false
             manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
-            manager.distanceFilter = 2.0 // 🎯 Cập nhật mỗi 2 mét (nhạy hơn)
+            manager.distanceFilter = 5.0 // Cập nhật mỗi 5 mét
             manager.activityType = .automotiveNavigation
             
             locationManager = manager
@@ -76,17 +76,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         
         // Yêu cầu quyền và bắt đầu theo dõi
         locationManager?.requestAlwaysAuthorization()
-        
-        // 🎯 KIỂM TRA QUYỀN TRƯỚC KHI BẮT ĐẦU
-        let status = CLLocationManager.authorizationStatus()
-        print("📍 Location Authorization Status: \(status.rawValue)")
-        
-        if status == .authorizedAlways || status == .authorizedWhenInUse {
-            locationManager?.startUpdatingLocation()
-            print("📍 Đã bắt đầu cập nhật vị trí")
-        } else {
-            print("📍 Chưa có quyền truy cập vị trí")
-        }
+        locationManager?.startUpdatingLocation()
     }
     
     // MARK: - Tilt Monitoring (SỬA THEO NGƯỠNG PHẦN TRĂM)
@@ -191,9 +181,6 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         let wasDriving = isDriving
         isDriving = currentSpeed >= drivingSpeedThreshold
         
-        // 🎯 DEBUG TỐC ĐỘ
-        print("🚗 Speed Update: \(currentSpeed) km/h | Driving: \(isDriving)")
-        
         // Thông báo thay đổi trạng thái lái xe
         if isDriving != wasDriving {
             let statusTime = Date()
@@ -208,7 +195,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
             ]
             
             self.sendEventToFlutter(statusData)
-            print("🎯 Driving status changed: \(isDriving ? "DRIVING" : "STOPPED") at \(currentSpeed) km/h")
+            print("Driving status changed: \(isDriving ? "DRIVING" : "STOPPED") at \(currentSpeed) km/h")
         }
     }
     
@@ -225,13 +212,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
             name: UIApplication.protectedDataWillBecomeUnavailableNotification,
             object: nil)
         
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
-            if let error = error {
-                print("❌ Notification permission error: \(error)")
-            } else {
-                print("🔔 Notification permission: \(granted ? "GRANTED" : "DENIED")")
-            }
-        }
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
     
     @objc func deviceDidUnlock() {
@@ -257,7 +238,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
             )
         }
         
-        print("📱 Device UNLOCKED at \(formatTime(unlockTime)) - Driving: \(isDriving), Speed: \(currentSpeed) km/h")
+        print("Device unlocked at \(formatTime(unlockTime)) - Driving: \(isDriving)")
     }
     
     @objc func deviceDidLock() {
@@ -274,29 +255,16 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         ]
         
         self.sendEventToFlutter(lockData)
-        print("🔒 Device LOCKED at \(formatTime(lockTime)) - Speed: \(currentSpeed) km/h")
+        print("Device locked at \(formatTime(lockTime))")
     }
     
     // MARK: - CLLocationManagerDelegate
     
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard let location = locations.last else { 
-            print("❌ No location data received")
-            return 
-        }
+        guard let location = locations.last else { return }
         
         // Tính toán tốc độ từ location data
         let speed = location.speed >= 0 ? location.speed : 0.0
-        
-        // 🎯 DEBUG CHI TIẾT VỀ LOCATION
-        print("""
-        📍 LOCATION UPDATE:
-        - Speed: \(speed)m/s (\(speed * 3.6)km/h)
-        - Accuracy: \(location.horizontalAccuracy)m
-        - Coordinates: \(location.coordinate.latitude), \(location.coordinate.longitude)
-        - Timestamp: \(location.timestamp)
-        """)
-        
         updateDrivingStatus(speed: speed)
         
         // Gửi dữ liệu vị trí về Flutter
@@ -316,33 +284,13 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
     }
     
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        print("❌ Location Manager Error: \(error.localizedDescription)")
-    }
-    
-    // 🎯 THÊM: XỬ LÝ THAY ĐỔI QUYỀN LOCATION
-    func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
-        print("📍 Location Authorization Changed: \(status.rawValue)")
-        
-        switch status {
-        case .authorizedAlways, .authorizedWhenInUse:
-            locationManager?.startUpdatingLocation()
-            print("📍 Bắt đầu cập nhật vị trí")
-        case .denied, .restricted:
-            print("📍 Quyền vị trí bị từ chối")
-        case .notDetermined:
-            print("📍 Quyền vị trí chưa được xác định")
-        @unknown default:
-            break
-        }
+        print("Location Manager Lỗi: \(error.localizedDescription)")
     }
     
     // MARK: - Flutter Communication
     
     private func sendEventToFlutter(_ data: [String: Any]) {
-        guard let eventSink = eventSink else { 
-            print("❌ EventSink is nil - Flutter chưa kết nối")
-            return 
-        }
+        guard let eventSink = eventSink else { return }
         
         do {
             let jsonData = try JSONSerialization.data(withJSONObject: data)
@@ -350,7 +298,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
                 eventSink(jsonString)
             }
         } catch {
-            print("❌ Lỗi chuyển đổi JSON: \(error)")
+            print("Lỗi chuyển đổi JSON: \(error)")
         }
     }
     
@@ -365,7 +313,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request) { error in
             if let error = error {
-                print("❌ Lỗi gửi thông báo: \(error.localizedDescription)")
+                print("Lỗi gửi thông báo: \(error.localizedDescription)")
             }
         }
     }
@@ -384,9 +332,9 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request) { error in
             if let error = error {
-                print("❌ Lỗi gửi thông báo critical: \(error.localizedDescription)")
+                print("Lỗi gửi thông báo critical: \(error.localizedDescription)")
             } else {
-                print("🔔 Đã gửi cảnh báo critical: \(message)")
+                print("Đã gửi cảnh báo critical: \(message)")
             }
         }
     }
