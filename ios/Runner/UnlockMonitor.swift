@@ -4,35 +4,45 @@ import CoreLocation
 import UIKit
 import UserNotifications
 
-@objcMembers // Cần thiết để gọi từ Objective-C/Flutter
+@objcMembers 
 class UnlockMonitor: NSObject, CLLocationManagerDelegate {
     
-    let locationManager = CLLocationManager()
+    // Khởi tạo lười biếng (Lazy Initialization)
+    private var locationManager: CLLocationManager?
     
-    // Khởi tạo Singleton để dễ dàng truy cập
+    // Khởi tạo Singleton
     static let shared = UnlockMonitor() 
 
     override init() {
         super.init()
-        locationManager.delegate = self
-        locationManager.allowsBackgroundLocationUpdates = true
-        locationManager.pausesLocationUpdatesAutomatically = false 
+        // Các thiết lập ban đầu (có thể để trống, hoặc chỉ gọi super.init)
     }
 
     func startMonitoring() {
-        // Yêu cầu quyền truy cập vị trí mọi lúc
-        locationManager.requestAlwaysAuthorization() 
-
-        // Bắt đầu theo dõi vị trí để giữ ứng dụng sống (workaround)
-        locationManager.startMonitoringSignificantLocationChanges()
+        // Khởi tạo CLLocationManager trong startMonitoring() thay vì init() 
+        // để đảm bảo nó chỉ được setup khi cần thiết
+        if locationManager == nil {
+            let manager = CLLocationManager()
+            manager.delegate = self
+            manager.allowsBackgroundLocationUpdates = true
+            manager.pausesLocationUpdatesAutomatically = false
+            locationManager = manager
+        }
         
-        // Đăng ký lắng nghe thông báo Màn hình Mở Khóa
+        // --- 1. Yêu cầu Quyền ---
+        locationManager?.requestAlwaysAuthorization() 
+
+        // --- 2. Bắt đầu Theo dõi ---
+        locationManager?.startMonitoringSignificantLocationChanges()
+        
+        // --- 3. Đăng ký Lắng nghe Màn hình Mở Khóa ---
+        // Lưu ý: Đăng ký này phải dùng NotificationCenter của hệ thống
         NotificationCenter.default.addObserver(self,
             selector: #selector(deviceDidUnlock),
             name: UIApplication.protectedDataDidBecomeAvailableNotification,
             object: nil)
         
-        // Yêu cầu quyền thông báo
+        // --- 4. Yêu cầu Quyền Thông báo ---
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
 
         print("Unlock Monitor: Đã đăng ký và bắt đầu theo dõi.")
@@ -40,22 +50,21 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate {
 
     // Hàm được gọi khi Màn hình được Mở khóa
     @objc func deviceDidUnlock() {
-        var taskId: UIBackgroundTaskIdentifier?
-        taskId = UIApplication.shared.beginBackgroundTask {
-            if let task = taskId {
-                UIApplication.shared.endBackgroundTask(task)
-            }
+        // Bắt đầu Background Task để đảm bảo có 30 giây để hoàn thành công việc
+        let backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "handleUnlockNotification") {
+            // Xử lý khi hết thời gian
+            print("Background Task hết hạn.")
+            UIApplication.shared.endBackgroundTask(backgroundTaskID)
         }
 
         // --- HÀNH ĐỘNG GỬI THÔNG BÁO TẠI ĐÂY ---
         let unlockTime = Date()
         self.sendLocalNotification(message: "Thiết bị vừa được mở khóa lúc \(formatTime(unlockTime))")
 
-        // Kết thúc Background Task
-        if let task = taskId {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { 
-                UIApplication.shared.endBackgroundTask(task)
-            }
+        // Kết thúc Background Task sau khi hoàn thành
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { 
+             UIApplication.shared.endBackgroundTask(backgroundTaskID)
+             print("Background Task kết thúc.")
         }
     }
     
@@ -76,6 +85,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate {
         }
     }
     
+    // Hàm Tiện ích Định dạng Thời gian
     private func formatTime(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss"

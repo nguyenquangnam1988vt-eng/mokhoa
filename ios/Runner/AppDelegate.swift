@@ -2,7 +2,6 @@
 
 import UIKit
 import Flutter
-// Cần import CoreLocation và UserNotifications nếu chưa có
 import CoreLocation 
 import UserNotifications 
 
@@ -14,11 +13,14 @@ class AppDelegate: FlutterAppDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
         
-        // Khởi tạo và chạy Monitor ngay khi ứng dụng khởi động
-        // Sử dụng Singleton instance
+        // BƯỚC 1: Đăng ký các plugin của Flutter trước
+        GeneratedPluginRegistrant.register(with: self)
+
+        // BƯỚC 2: Gọi code tùy chỉnh (đã đảm bảo Flutter sẵn sàng)
+        // Lưu ý: Nếu UnlockMonitor sử dụng các plugin Flutter, việc này là cần thiết
         UnlockMonitor.shared.startMonitoring() 
 
-        GeneratedPluginRegistrant.register(with: self)
+        // BƯỚC 3: Trả về kết quả
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
 }
