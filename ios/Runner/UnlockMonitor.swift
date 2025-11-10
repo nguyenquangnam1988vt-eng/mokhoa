@@ -323,7 +323,11 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         content.title = title
         content.body = message
         content.sound = UNNotificationSound.defaultCritical
-        content.interruptionLevel = .critical
+        
+        // ✅ SỬA LỖI: Thêm điều kiện kiểm tra version iOS
+        if #available(iOS 15.0, *) {
+            content.interruptionLevel = .critical
+        }
         
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request) { error in
