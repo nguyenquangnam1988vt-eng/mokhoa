@@ -3,40 +3,52 @@
 import CoreLocation
 import UIKit
 import UserNotifications
+import Flutter
 
 @objcMembers 
 class UnlockMonitor: NSObject, CLLocationManagerDelegate {
     
-    // Khởi tạo lười biếng (Lazy Initialization) cho CLLocationManager
     private var locationManager: CLLocationManager?
+    private var flutterChannel: FlutterMethodChannel? // Kênh truyền thông
     
-    // Khởi tạo Singleton để truy cập dễ dàng
+    // Khởi tạo Singleton
     static let shared = UnlockMonitor() 
 
     override init() {
         super.init()
     }
 
+    // Hàm cần được gọi từ AppDelegate để thiết lập kênh Flutter
+    func setupFlutterChannel(binaryMessenger: FlutterBinaryMessenger) {
+        flutterChannel = FlutterMethodChannel(
+            name: "com.example.background_location", 
+            binaryMessenger: binaryMessenger
+        )
+        print("Unlock Monitor: Đã thiết lập Flutter Channel.")
+    }
+    
     func startMonitoring() {
-        // Khởi tạo CLLocationManager lần đầu khi được gọi
         if locationManager == nil {
             let manager = CLLocationManager()
             manager.delegate = self
+            
+            // Cấu hình Bắt buộc cho Nền và Độ chính xác cao
             manager.allowsBackgroundLocationUpdates = true
             manager.pausesLocationUpdatesAutomatically = false
+            manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
+            manager.distanceFilter = kCLDistanceFilterNone // Nhận mọi cập nhật
+            manager.activityType = .automotiveNavigation // Loại hoạt động phù hợp nhất cho vị trí liên tục
+
             locationManager = manager
         }
         
         // --- 1. Yêu cầu Quyền ---
-        // Phải đảm bảo Info.plist có khóa NSLocationAlwaysAndWhenInUseUsageDescription
         locationManager?.requestAlwaysAuthorization() 
 
-        // --- 2. Bắt đầu Theo dõi ---
-        // Dùng startMonitoringSignificantLocationChanges để tiết kiệm pin và giữ ứng dụng sống trong nền
-        locationManager?.startMonitoringSignificantLocationChanges()
+        // --- 2. Bắt đầu Theo dõi Liên tục (Tiêu hao pin cao!) ---
+        locationManager?.startUpdatingLocation() 
         
         // --- 3. Đăng ký Lắng nghe Màn hình Mở Khóa ---
-        // Lắng nghe thông báo khi protected data có sẵn (thường là sau khi mở khóa)
         NotificationCenter.default.addObserver(self,
             selector: #selector(deviceDidUnlock),
             name: UIApplication.protectedDataDidBecomeAvailableNotification,
@@ -51,24 +63,34 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate {
     // Hàm được gọi khi Màn hình được Mở khóa
     @objc func deviceDidUnlock() {
         
-        // KHẮC PHỤC LỖI BIÊN DỊCH: Khai báo biến trước khi gán
         var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
-        
-        // Bắt đầu Background Task để đảm bảo có thời gian (tối đa 30 giây) để hoàn thành công việc
         backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "handleUnlockNotification") {
-            // Khối code này chạy nếu task hết thời gian
             print("Background Task hết hạn.")
             UIApplication.shared.endBackgroundTask(backgroundTaskID)
         }
 
-        // --- HÀNH ĐỘNG GỬI THÔNG BÁO TẠI ĐÂY ---
+        // --- GỌI CODE FLUTTER NỀN HOẶC GỬI THÔNG BÁO TẠI ĐÂY ---
         let unlockTime = Date()
+        self.sendDataToFlutter(method: "deviceUnlocked", data: ["time": formatTime(unlockTime)])
         self.sendLocalNotification(message: "Thiết bị vừa được mở khóa lúc \(formatTime(unlockTime))")
 
-        // 3. Kết thúc Background Task sau khi hoàn thành công việc (cho nó thêm 1 giây để xử lý xong thông báo)
+        // Kết thúc Background Task sau 1 giây (đủ để gửi thông báo/gọi Flutter)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { 
              UIApplication.shared.endBackgroundTask(backgroundTaskID)
              print("Background Task kết thúc.")
+        }
+    }
+    
+    // Hàm gửi dữ liệu về Flutter
+    private func sendDataToFlutter(method: String, data: [String: Any]) {
+        flutterChannel?.invokeMethod(method, arguments: data) { result in
+            if let error = result as? FlutterError {
+                print("Lỗi gọi Flutter: \(error.message ?? "")")
+            } else if result is FlutterMethodNotImplemented {
+                print("Phương thức Flutter chưa được triển khai.")
+            } else {
+                print("Đã gọi thành công Flutter method: \(method)")
+            }
         }
     }
     
@@ -99,8 +121,18 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate {
     // --- CLLocationManagerDelegate Methods ---
     
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        // Hàm này bắt buộc phải có khi sử dụng startMonitoringSignificantLocationChanges 
-        // Dùng để giữ cho iOS biết dịch vụ vị trí đang hoạt động
+        guard let location = locations.last else { return }
+        
+        // Truyền dữ liệu vị trí liên tục về Flutter
+        let data: [String: Any] = [
+            "latitude": location.coordinate.latitude,
+            "longitude": location.coordinate.longitude,
+            "timestamp": location.timestamp.timeIntervalSince1970 * 1000 // Chuyển sang mili giây
+        ]
+        self.sendDataToFlutter(method: "newLocationUpdate", data: data)
+
+        // Bạn có thể gửi thông báo cục bộ ở đây nếu cần cảnh báo khi vị trí thay đổi
+        // sendLocalNotification(message: "Vị trí mới: \(location.coordinate.latitude), \(location.coordinate.longitude)")
     }
     
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
