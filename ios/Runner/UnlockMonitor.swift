@@ -16,10 +16,9 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
     private var currentSpeed: Double = 0.0 // km/h
     private var isDriving = false
     
-    // Ngưỡng tốc độ để xác định đang lái xe (km/h)
+    // 🎯 NGƯỠNG MỚI: SỬ DỤNG PHẦN TRĂM THAY VÌ RADIAN
     private let drivingSpeedThreshold: Double = 10.0
-    // Ngưỡng nghiêng để xác định đang cầm điện thoại
-    private let tiltThreshold: Double = 0.3
+    private let viewingPhoneThreshold: Double = 60.0 // 60% = ĐANG XEM
     
     // Khởi tạo Singleton
     static let shared = UnlockMonitor()
@@ -58,7 +57,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         NotificationCenter.default.removeObserver(self)
     }
     
-    // MARK: - Location Monitoring (CẬP NHẬT ĐỂ TÍNH TỐC ĐỘ)
+    // MARK: - Location Monitoring
     
     private func setupLocationMonitoring() {
         if locationManager == nil {
@@ -80,7 +79,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         locationManager?.startUpdatingLocation()
     }
     
-    // MARK: - Tilt Monitoring (KẾT HỢP TỐC ĐỘ)
+    // MARK: - Tilt Monitoring (SỬA THEO NGƯỠNG PHẦN TRĂM)
     
     private func setupTiltMonitoring() {
         if motionManager == nil {
@@ -94,7 +93,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
             return
         }
         
-        motionManager.accelerometerUpdateInterval = 1.0
+        motionManager.accelerometerUpdateInterval = 0.1 // 100ms để tính trung bình mượt hơn
         
         motionManager.startAccelerometerUpdates(to: .main) { [weak self] (data, error) in
             guard let self = self else { return }
@@ -114,19 +113,38 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         print("Đã bắt đầu theo dõi cảm biến nghiêng")
     }
     
+    // 🎯 HÀM MỚI: CHUYỂN ĐỔI RADIAN SANG PHẦN TRĂM
+    private func convertTiltToPercent(_ zValue: Double) -> Double {
+        // Giả sử: z = 1.0 khi điện thoại nằm ngang (90 độ)
+        // z = 0.0 khi điện thoại thẳng đứng (0 độ)
+        let tiltAbsolute = abs(zValue)
+        let tiltPercent = (tiltAbsolute / 1.0) * 100.0
+        return min(max(tiltPercent, 0.0), 100.0) // Giới hạn trong 0-100%
+    }
+    
+    // 🎯 HÀM MỚI: XÁC ĐỊNH TRẠNG THÁI TILT
+    private func getTiltStatus(_ tiltPercent: Double) -> String {
+        if tiltPercent <= 60.0 {
+            return "📱 ĐANG XEM (\(String(format: "%.1f", tiltPercent))%)"
+        } else if tiltPercent < 70.0 {
+            return "⚡ TRUNG GIAN (\(String(format: "%.1f", tiltPercent))%)"
+        } else {
+            return "🔼 KHÔNG XEM (\(String(format: "%.1f", tiltPercent))%)"
+        }
+    }
+    
     private func handleTiltDetection(zValue: Double) {
-        // Chỉ cảnh báo khi device đã mở khóa VÀ đang di chuyển với tốc độ cao
-        guard isDeviceUnlocked else { return }
+        // 🎯 CHUYỂN ĐỔI SANG PHẦN TRĂM
+        let tiltPercent = convertTiltToPercent(zValue)
+        let isViewingPhone = tiltPercent <= viewingPhoneThreshold
         
-        let isTilting = abs(zValue) > tiltThreshold
-        
-        if isTilting && isDriving {
-            // PHÁT HIỆN NGUY HIỂM: Đang lái xe + nghiêng điện thoại + mở khóa
+        // 🎯 ĐIỀU KIỆN CẢNH BÁO MỚI: MỞ KHÓA + ĐANG LÁI XE + ĐANG XEM ĐIỆN THOẠI
+        if isDeviceUnlocked && isDriving && isViewingPhone {
             let dangerTime = Date()
             let dangerData: [String: Any] = [
                 "type": "DANGER_EVENT",
-                "message": "CẢNH BÁO NGUY HIỂM: Đang lái xe ở tốc độ \(String(format: "%.1f", currentSpeed)) km/h và sử dụng điện thoại!",
-                "tiltValue": zValue,
+                "message": "CẢNH BÁO NGUY HIỂM: Đang lái xe ở \(String(format: "%.1f", currentSpeed)) km/h và sử dụng điện thoại!",
+                "tiltValue": zValue, // Vẫn gửi radian để Flutter tính %
                 "speed": currentSpeed,
                 "timestamp": Int(dangerTime.timeIntervalSince1970 * 1000)
             ]
@@ -134,15 +152,18 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
             self.sendEventToFlutter(dangerData)
             self.sendCriticalNotification(
                 title: "CẢNH BÁO NGUY HIỂM!",
-                message: "Bạn đang lái xe ở \(String(format: "%.1f", currentSpeed)) km/h và sử dụng điện thoại"
+                message: "Bạn đang lái xe ở \(String(format: "%.1f", currentSpeed)) km/h và sử dụng điện thoại (Tilt: \(String(format: "%.1f", tiltPercent))%)"
             )
             
-        } else if isTilting {
-            // Chỉ nghiêng thông thường (không nguy hiểm)
+            print("🚨 DANGER ALERT: Driving at \(currentSpeed) km/h, Tilt: \(tiltPercent)%")
+            
+        } else {
+            // Gửi sự kiện tilt thông thường
+            let tiltStatus = getTiltStatus(tiltPercent)
             let tiltTime = Date()
             let tiltData: [String: Any] = [
                 "type": "TILT_EVENT",
-                "message": "Thiết bị đang nghiêng: \(String(format: "%.3f", zValue)) rad",
+                "message": "Thiết bị: \(tiltStatus)",
                 "tiltValue": zValue,
                 "speed": currentSpeed,
                 "timestamp": Int(tiltTime.timeIntervalSince1970 * 1000)
@@ -237,7 +258,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         print("Device locked at \(formatTime(lockTime))")
     }
     
-    // MARK: - CLLocationManagerDelegate (CẬP NHẬT TÍNH TỐC ĐỘ)
+    // MARK: - CLLocationManagerDelegate
     
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let location = locations.last else { return }
@@ -246,7 +267,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         let speed = location.speed >= 0 ? location.speed : 0.0
         updateDrivingStatus(speed: speed)
         
-        // Gửi dữ liệu vị trí về Flutter (nếu cần)
+        // Gửi dữ liệu vị trí về Flutter
         let locationData: [String: Any] = [
             "type": "LOCATION_UPDATE",
             "latitude": location.coordinate.latitude,

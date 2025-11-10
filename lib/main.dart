@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 void main() {
   runApp(const MyApp());
@@ -76,6 +77,11 @@ class _MonitorScreenState extends State<MonitorScreen> {
   double _currentSpeed = 0.0;
   bool _isDriving = false;
 
+  // 🎯 THÊM: Lưu trữ lịch sử tilt để tính trung bình
+  final List<double> _tiltHistory = [];
+  static const int _tiltBufferSize = 30; // ~3 giây (30 mẫu * 100ms)
+  double _averageTiltPercent = 0.0;
+
   @override
   void initState() {
     super.initState();
@@ -90,6 +96,46 @@ class _MonitorScreenState extends State<MonitorScreen> {
     );
   }
 
+  // 🎯 THÊM: Hàm tính tilt trung bình từ radian sang phần trăm
+  void _updateTiltAverage(double tiltRadians) {
+    // Chuyển radian sang phần trăm (0-100%)
+    // Giả sử tiltRadians = 0 khi thẳng đứng, pi/2 khi nằm ngang
+    double tiltPercent = (tiltRadians.abs() / (pi / 2)) * 100.0;
+    tiltPercent = tiltPercent.clamp(0.0, 100.0);
+
+    _tiltHistory.add(tiltPercent);
+    if (_tiltHistory.length > _tiltBufferSize) {
+      _tiltHistory.removeAt(0);
+    }
+
+    // Tính trung bình
+    if (_tiltHistory.isNotEmpty) {
+      _averageTiltPercent = _tiltHistory.reduce((a, b) => a + b) / _tiltHistory.length;
+    }
+  }
+
+  // 🎯 THÊM: Hàm xác định trạng thái tilt theo ngưỡng 60%
+  String _getTiltStatus(double tiltPercent) {
+    if (tiltPercent <= 60.0) {
+      return "📱 ĐANG XEM (${tiltPercent.toStringAsFixed(1)}%)";
+    } else if (tiltPercent < 70.0) {
+      return "⚡ TRUNG GIAN (${tiltPercent.toStringAsFixed(1)}%)";
+    } else {
+      return "🔼 KHÔNG XEM (${tiltPercent.toStringAsFixed(1)}%)";
+    }
+  }
+
+  // 🎯 THÊM: Hàm xác định màu sắc theo trạng thái tilt
+  Color _getTiltColor(double tiltPercent) {
+    if (tiltPercent <= 60.0) {
+      return Colors.red.shade700; // ĐANG XEM - ĐỎ
+    } else if (tiltPercent < 70.0) {
+      return Colors.orange.shade700; // TRUNG GIAN - CAM
+    } else {
+      return Colors.green.shade700; // KHÔNG XEM - XANH
+    }
+  }
+
   void _onEvent(dynamic event) {
     setState(() {
       _connectionStatus = "Đã kết nối";
@@ -99,6 +145,10 @@ class _MonitorScreenState extends State<MonitorScreen> {
 
         if (monitorEvent.type == 'TILT_EVENT') {
           _latestTiltEvent = monitorEvent;
+          // 🎯 CẬP NHẬT TILT TRUNG BÌNH KHI CÓ DỮ LIỆU MỚI
+          if (monitorEvent.tiltValue != null) {
+            _updateTiltAverage(monitorEvent.tiltValue!);
+          }
         } else if (monitorEvent.type == 'DANGER_EVENT') {
           _latestDangerEvent = monitorEvent;
           _historyEvents.insert(0, monitorEvent);
@@ -171,6 +221,12 @@ class _MonitorScreenState extends State<MonitorScreen> {
               'Thời gian: ${_latestDangerEvent!.timestamp.toString().substring(11, 19)}',
               style: const TextStyle(color: Colors.white70, fontSize: 12),
             ),
+            // 🎯 THÊM: Hiển thị tilt trung bình khi cảnh báo
+            if (_latestDangerEvent!.tiltValue != null)
+              Text(
+                'Tilt trung bình: ${_averageTiltPercent.toStringAsFixed(1)}%',
+                style: const TextStyle(color: Colors.white70, fontSize: 12),
+              ),
           ],
         ),
       ),
@@ -234,17 +290,9 @@ class _MonitorScreenState extends State<MonitorScreen> {
     final double tiltValue = _latestTiltEvent?.tiltValue ?? 0.0;
     final String tiltMessage = _latestTiltEvent?.message ?? 'Chờ dữ liệu...';
     
-    // GIỮ NGUYÊN ĐIỀU KIỆN NGHIÊNG NHƯ CODE CŨ
-    Color tiltColor = Colors.grey;
-    if (tiltValue.abs() > 0.05) {
-      tiltColor = Colors.yellow.shade700;
-    }
-    if (tiltValue.abs() > 0.1) {
-      tiltColor = Colors.orange.shade700;
-    }
-    if (tiltValue.abs() > 0.2) {
-      tiltColor = Colors.red.shade700;
-    }
+    // 🎯 SỬ DỤNG NGUYÊN TILT TRUNG BÌNH VÀ NGƯỠNG 60%
+    final String tiltStatus = _getTiltStatus(_averageTiltPercent);
+    final Color tiltColor = _getTiltColor(_averageTiltPercent);
 
     return Card(
       elevation: 6,
@@ -265,9 +313,49 @@ class _MonitorScreenState extends State<MonitorScreen> {
               ],
             ),
             const Divider(color: Colors.white10, height: 20),
+            
+            // 🎯 HIỂN THỊ TRẠNG THÁI TILT THEO NGƯỠNG 60%
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: tiltColor.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: tiltColor, width: 2),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    _averageTiltPercent <= 60.0 ? Icons.warning : 
+                    _averageTiltPercent < 70.0 ? Icons.info : Icons.check_circle,
+                    color: tiltColor,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      tiltStatus,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: tiltColor,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            
+            const SizedBox(height: 12),
             Text(
-              'Góc Nghiêng Hiện Tại (Z-Axis): ${tiltValue.toStringAsFixed(3)} radians',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: tiltColor),
+              'Góc Nghiêng Hiện Tại: ${tiltValue.toStringAsFixed(3)} rad',
+              style: const TextStyle(fontSize: 14, color: Colors.white70),
+            ),
+            Text(
+              'Tilt Trung Bình (3s): ${_averageTiltPercent.toStringAsFixed(1)}%',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: tiltColor,
+              ),
             ),
             const SizedBox(height: 8),
             Text(
@@ -305,6 +393,11 @@ class _MonitorScreenState extends State<MonitorScreen> {
         icon = Icons.warning;
         if (event.speed != null) {
           subtitle += '\nTốc độ: ${event.speed!.toStringAsFixed(1)} km/h';
+        }
+        if (event.tiltValue != null) {
+          // 🎯 THÊM: Hiển thị tilt trong sự kiện danger
+          double tiltPercent = (event.tiltValue!.abs() / (pi / 2)) * 100.0;
+          subtitle += '\nTilt: ${tiltPercent.toStringAsFixed(1)}%';
         }
         break;
       
@@ -366,7 +459,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 4.0),
             child: Text(
-              'Trạng thái kênh: $_connectionStatus',
+              'Trạng thái kênh: $_connectionStatus | Tilt trung bình: ${_averageTiltPercent.toStringAsFixed(1)}%',
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 12, color: Colors.white70),
             ),
