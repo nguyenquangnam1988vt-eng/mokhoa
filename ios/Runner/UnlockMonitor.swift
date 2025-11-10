@@ -7,20 +7,18 @@ import UserNotifications
 @objcMembers 
 class UnlockMonitor: NSObject, CLLocationManagerDelegate {
     
-    // Khởi tạo lười biếng (Lazy Initialization)
+    // Khởi tạo lười biếng (Lazy Initialization) cho CLLocationManager
     private var locationManager: CLLocationManager?
     
-    // Khởi tạo Singleton
+    // Khởi tạo Singleton để truy cập dễ dàng
     static let shared = UnlockMonitor() 
 
     override init() {
         super.init()
-        // Các thiết lập ban đầu (có thể để trống, hoặc chỉ gọi super.init)
     }
 
     func startMonitoring() {
-        // Khởi tạo CLLocationManager trong startMonitoring() thay vì init() 
-        // để đảm bảo nó chỉ được setup khi cần thiết
+        // Khởi tạo CLLocationManager lần đầu khi được gọi
         if locationManager == nil {
             let manager = CLLocationManager()
             manager.delegate = self
@@ -30,13 +28,15 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate {
         }
         
         // --- 1. Yêu cầu Quyền ---
+        // Phải đảm bảo Info.plist có khóa NSLocationAlwaysAndWhenInUseUsageDescription
         locationManager?.requestAlwaysAuthorization() 
 
         // --- 2. Bắt đầu Theo dõi ---
+        // Dùng startMonitoringSignificantLocationChanges để tiết kiệm pin và giữ ứng dụng sống trong nền
         locationManager?.startMonitoringSignificantLocationChanges()
         
         // --- 3. Đăng ký Lắng nghe Màn hình Mở Khóa ---
-        // Lưu ý: Đăng ký này phải dùng NotificationCenter của hệ thống
+        // Lắng nghe thông báo khi protected data có sẵn (thường là sau khi mở khóa)
         NotificationCenter.default.addObserver(self,
             selector: #selector(deviceDidUnlock),
             name: UIApplication.protectedDataDidBecomeAvailableNotification,
@@ -50,9 +50,13 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate {
 
     // Hàm được gọi khi Màn hình được Mở khóa
     @objc func deviceDidUnlock() {
-        // Bắt đầu Background Task để đảm bảo có 30 giây để hoàn thành công việc
-        let backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "handleUnlockNotification") {
-            // Xử lý khi hết thời gian
+        
+        // KHẮC PHỤC LỖI BIÊN DỊCH: Khai báo biến trước khi gán
+        var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
+        
+        // Bắt đầu Background Task để đảm bảo có thời gian (tối đa 30 giây) để hoàn thành công việc
+        backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "handleUnlockNotification") {
+            // Khối code này chạy nếu task hết thời gian
             print("Background Task hết hạn.")
             UIApplication.shared.endBackgroundTask(backgroundTaskID)
         }
@@ -61,7 +65,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate {
         let unlockTime = Date()
         self.sendLocalNotification(message: "Thiết bị vừa được mở khóa lúc \(formatTime(unlockTime))")
 
-        // Kết thúc Background Task sau khi hoàn thành
+        // 3. Kết thúc Background Task sau khi hoàn thành công việc (cho nó thêm 1 giây để xử lý xong thông báo)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { 
              UIApplication.shared.endBackgroundTask(backgroundTaskID)
              print("Background Task kết thúc.")
@@ -92,9 +96,11 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate {
         return formatter.string(from: date)
     }
 
-    // CLLocationManagerDelegate: Giữ ứng dụng sống
+    // --- CLLocationManagerDelegate Methods ---
+    
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        // Giữ cho iOS biết dịch vụ đang hoạt động
+        // Hàm này bắt buộc phải có khi sử dụng startMonitoringSignificantLocationChanges 
+        // Dùng để giữ cho iOS biết dịch vụ vị trí đang hoạt động
     }
     
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
