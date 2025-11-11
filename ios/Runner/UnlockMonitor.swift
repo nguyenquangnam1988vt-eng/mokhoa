@@ -16,9 +16,14 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
     private var currentSpeed: Double = 0.0 // km/h
     private var isDriving = false
     
-    // 🎯 NGƯỠNG MỚI: SỬ DỤNG PHẦN TRĂM THAY VÌ RADIAN
+    // 🎯 CẬP NHẬT: Ngưỡng mới
     private let drivingSpeedThreshold: Double = 10.0
-    private let viewingPhoneThreshold: Double = 60.0 // 60% = ĐANG XEM
+    private let viewingPhoneThreshold: Double = 55.0 // 55% = ĐANG XEM
+    
+    // 🎯 THÊM: Biến theo dõi độ ổn định trục Z
+    private var zAccelerationHistory: [Double] = []
+    private let zStabilityBufferSize = 50 // 5 giây (50 mẫu * 100ms)
+    private var zStability: Double = 0.0
     
     // Khởi tạo Singleton
     static let shared = UnlockMonitor()
@@ -68,7 +73,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
             manager.allowsBackgroundLocationUpdates = true
             manager.pausesLocationUpdatesAutomatically = false
             manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
-            manager.distanceFilter = 2.0 // 🎯 Cập nhật mỗi 2 mét (nhạy hơn)
+            manager.distanceFilter = 1.0 // 🎯 GIẢM: Cập nhật mỗi 1 mét (thường xuyên hơn)
             manager.activityType = .automotiveNavigation
             
             locationManager = manager
@@ -77,7 +82,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         // Yêu cầu quyền và bắt đầu theo dõi
         locationManager?.requestAlwaysAuthorization()
         
-        // 🎯 KIỂM TRA QUYỀN TRƯỚC KHI BẮT ĐẦU
+        // KIỂM TRA QUYỀN TRƯỚC KHI BẮT ĐẦU
         let status = CLLocationManager.authorizationStatus()
         print("📍 Location Authorization Status: \(status.rawValue)")
         
@@ -89,7 +94,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         }
     }
     
-    // MARK: - Tilt Monitoring (SỬA THEO NGƯỠNG PHẦN TRĂM)
+    // MARK: - Tilt Monitoring (CẬP NHẬT THEO NGƯỠNG MỚI)
     
     private func setupTiltMonitoring() {
         if motionManager == nil {
@@ -116,6 +121,10 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
             // Xử lý tilt khi device đã mở khóa
             if self.isDeviceUnlocked, let accelerometerData = data {
                 let zAcceleration = accelerometerData.acceleration.z
+                
+                // 🎯 CẬP NHẬT: Tính độ ổn định trục Z
+                self.updateZStability(zValue: zAcceleration)
+                
                 self.handleTiltDetection(zValue: zAcceleration)
             }
         }
@@ -123,38 +132,58 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         print("Đã bắt đầu theo dõi cảm biến nghiêng")
     }
     
-    // 🎯 HÀM MỚI: CHUYỂN ĐỔI RADIAN SANG PHẦN TRĂM
+    // 🎯 THÊM: Hàm tính độ ổn định trục Z trong 5 giây
+    private func updateZStability(zValue: Double) {
+        zAccelerationHistory.append(zValue)
+        if zAccelerationHistory.count > zStabilityBufferSize {
+            zAccelerationHistory.removeFirst()
+        }
+        
+        // Tính độ dao động (standard deviation)
+        if zAccelerationHistory.count >= 2 {
+            let mean = zAccelerationHistory.reduce(0, +) / Double(zAccelerationHistory.count)
+            let variance = zAccelerationHistory.map { pow($0 - mean, 2) }.reduce(0, +) / Double(zAccelerationHistory.count)
+            zStability = sqrt(variance)
+        }
+        
+        // 🎯 DEBUG: In độ ổn định định kỳ
+        if Int(Date().timeIntervalSince1970) % 10 == 0 {
+            print("📊 Z Stability (5s): \(String(format: "%.3f", zStability))")
+        }
+    }
+    
+    // 🎯 CẬP NHẬT: Hàm chuyển đổi radian sang phần trăm
     private func convertTiltToPercent(_ zValue: Double) -> Double {
-        // Giả sử: z = 1.0 khi điện thoại nằm ngang (90 độ)
-        // z = 0.0 khi điện thoại thẳng đứng (0 độ)
         let tiltAbsolute = abs(zValue)
         let tiltPercent = (tiltAbsolute / 1.0) * 100.0
         return min(max(tiltPercent, 0.0), 100.0) // Giới hạn trong 0-100%
     }
     
-    // 🎯 HÀM MỚI: XÁC ĐỊNH TRẠNG THÁI TILT
+    // 🎯 CẬP NHẬT: Hàm xác định trạng thái tilt theo ngưỡng mới
     private func getTiltStatus(_ tiltPercent: Double) -> String {
-        if tiltPercent <= 60.0 {
-            return "📱 ĐANG XEM (\(String(format: "%.1f", tiltPercent))%)"
-        } else if tiltPercent < 70.0 {
-            return "⚡ TRUNG GIAN (\(String(format: "%.1f", tiltPercent))%)"
+        if tiltPercent <= 55.0 {
+            return "📱 ĐANG XEM"
+        } else if tiltPercent < 65.0 {
+            return "⚡ TRUNG GIAN"
         } else {
-            return "🔼 KHÔNG XEM (\(String(format: "%.1f", tiltPercent))%)"
+            return "🔼 KHÔNG XEM"
         }
     }
     
     private func handleTiltDetection(zValue: Double) {
-        // 🎯 CHUYỂN ĐỔI SANG PHẦN TRĂM
+        // CHUYỂN ĐỔI SANG PHẦN TRĂM
         let tiltPercent = convertTiltToPercent(zValue)
         let isViewingPhone = tiltPercent <= viewingPhoneThreshold
         
-        // 🎯 ĐIỀU KIỆN CẢNH BÁO MỚI: MỞ KHÓA + ĐANG LÁI XE + ĐANG XEM ĐIỆN THOẠI
-        if isDeviceUnlocked && isDriving && isViewingPhone {
+        // 🎯 CẬP NHẬT: Điều kiện cảnh báo mới với độ ổn định trục Z
+        let isZStable = zStability < 1.5 // Độ dao động dưới 1.5
+        
+        if isDeviceUnlocked && isDriving && isViewingPhone && isZStable {
             let dangerTime = Date()
             let dangerData: [String: Any] = [
                 "type": "DANGER_EVENT",
                 "message": "CẢNH BÁO NGUY HIỂM: Đang lái xe ở \(String(format: "%.1f", currentSpeed)) km/h và sử dụng điện thoại!",
-                "tiltValue": zValue, // Vẫn gửi radian để Flutter tính %
+                "tiltValue": zValue,
                 "speed": currentSpeed,
                 "timestamp": Int(dangerTime.timeIntervalSince1970 * 1000)
             ]
@@ -162,10 +191,10 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
             self.sendEventToFlutter(dangerData)
             self.sendCriticalNotification(
                 title: "CẢNH BÁO NGUY HIỂM!",
-                message: "Bạn đang lái xe ở \(String(format: "%.1f", currentSpeed)) km/h và sử dụng điện thoại (Tilt: \(String(format: "%.1f", tiltPercent))%)"
+                message: "Bạn đang lái xe ở \(String(format: "%.1f", currentSpeed)) km/h và sử dụng điện thoại (Tilt: \(String(format: "%.1f", tiltPercent))%, Ổn định: \(String(format: "%.2f", zStability)))"
             )
             
-            print("🚨 DANGER ALERT: Driving at \(currentSpeed) km/h, Tilt: \(tiltPercent)%")
+            print("🚨 DANGER ALERT: Driving at \(currentSpeed) km/h, Tilt: \(tiltPercent)%, Z Stability: \(zStability)")
             
         } else {
             // Gửi sự kiện tilt thông thường
@@ -209,6 +238,18 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
             
             self.sendEventToFlutter(statusData)
             print("🎯 Driving status changed: \(isDriving ? "DRIVING" : "STOPPED") at \(currentSpeed) km/h")
+        } else {
+            // 🎯 THÊM: Gửi cập nhật tốc độ thường xuyên ngay cả khi không thay đổi trạng thái
+            let statusTime = Date()
+            let statusData: [String: Any] = [
+                "type": "LOCATION_UPDATE",
+                "message": "Tốc độ: \(String(format: "%.1f", currentSpeed)) km/h",
+                "speed": currentSpeed,
+                "isDriving": isDriving,
+                "timestamp": Int(statusTime.timeIntervalSince1970 * 1000)
+            ]
+            
+            self.sendEventToFlutter(statusData)
         }
     }
     
@@ -319,7 +360,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         print("❌ Location Manager Error: \(error.localizedDescription)")
     }
     
-    // 🎯 THÊM: XỬ LÝ THAY ĐỔI QUYỀN LOCATION
+    // THÊM: XỬ LÝ THAY ĐỔI QUYỀN LOCATION
     func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
         print("📍 Location Authorization Changed: \(status.rawValue)")
         
@@ -376,7 +417,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         content.body = message
         content.sound = UNNotificationSound.defaultCritical
         
-        // ✅ SỬA LỖI: Thêm điều kiện kiểm tra version iOS
+        // SỬA LỖI: Thêm điều kiện kiểm tra version iOS
         if #available(iOS 15.0, *) {
             content.interruptionLevel = .critical
         }
