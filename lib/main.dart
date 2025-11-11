@@ -18,6 +18,7 @@ class MonitorEvent {
   final double? tiltValue;
   final double? speed;
   final bool? isDriving;
+  final bool? isProximityDetected; // 🆕 THÊM: Trạng thái cảm biến tiệm cận
   final DateTime timestamp;
 
   MonitorEvent({
@@ -27,6 +28,7 @@ class MonitorEvent {
     this.tiltValue,
     this.speed,
     this.isDriving,
+    this.isProximityDetected, // 🆕 THÊM
     required this.timestamp,
   });
 
@@ -38,6 +40,7 @@ class MonitorEvent {
       tiltValue: json['tiltValue'] as double?,
       speed: json['speed'] as double?,
       isDriving: json['isDriving'] as bool?,
+      isProximityDetected: json['isProximityDetected'] as bool?, // 🆕 THÊM
       timestamp: DateTime.fromMillisecondsSinceEpoch(json['timestamp'] as int),
     );
   }
@@ -73,11 +76,13 @@ class _MonitorScreenState extends State<MonitorScreen> {
   List<MonitorEvent> _historyEvents = [];
   MonitorEvent? _latestTiltEvent;
   MonitorEvent? _latestDangerEvent;
+  MonitorEvent? _latestProximityEvent; // 🆕 THÊM: Sự kiện cảm biến tiệm cận mới nhất
   String _connectionStatus = "Đang chờ kết nối...";
   double _currentSpeed = 0.0;
   bool _isDriving = false;
+  bool _isProximityDetected = false; // 🆕 THÊM: Trạng thái cảm biến tiệm cận
 
-  // 🎯 CẬP NHẬT: Lưu trữ lịch sử tilt để tính trung bình 3s
+  // Lưu trữ lịch sử tilt để tính trung bình 3s
   final List<double> _tiltHistory = [];
   static const int _tiltBufferSize = 30; // 30 mẫu * 100ms = 3 giây
   double _averageTiltPercent = 0.0;
@@ -96,9 +101,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
     );
   }
 
-  // 🎯 CẬP NHẬT: Hàm tính tilt trung bình 3s
   void _updateTiltAverage(double tiltRadians) {
-    // Chuyển radian sang phần trăm (0-100%)
     double tiltPercent = (tiltRadians.abs() / (pi / 2)) * 100.0;
     tiltPercent = tiltPercent.clamp(0.0, 100.0);
 
@@ -107,13 +110,11 @@ class _MonitorScreenState extends State<MonitorScreen> {
       _tiltHistory.removeAt(0);
     }
 
-    // Tính trung bình 3s
     if (_tiltHistory.isNotEmpty) {
       _averageTiltPercent = _tiltHistory.reduce((a, b) => a + b) / _tiltHistory.length;
     }
   }
 
-  // 🎯 CẬP NHẬT: Hàm xác định trạng thái tilt theo ngưỡng mới
   String _getTiltStatus(double tiltPercent) {
     if (tiltPercent <= 55.0) {
       return "📱 ĐANG XEM";
@@ -124,15 +125,23 @@ class _MonitorScreenState extends State<MonitorScreen> {
     }
   }
 
-  // 🎯 CẬP NHẬT: Hàm xác định màu sắc theo trạng thái tilt mới
   Color _getTiltColor(double tiltPercent) {
     if (tiltPercent <= 55.0) {
-      return Colors.red.shade700; // ĐANG XEM - ĐỎ
+      return Colors.red.shade700;
     } else if (tiltPercent < 65.0) {
-      return Colors.orange.shade700; // TRUNG GIAN - CAM
+      return Colors.orange.shade700;
     } else {
-      return Colors.green.shade700; // KHÔNG XEM - XANH
+      return Colors.green.shade700;
     }
+  }
+
+  // 🆕 THÊM: Hàm xác định trạng thái cảm biến tiệm cận
+  String _getProximityStatus(bool isProximityDetected) {
+    return isProximityDetected ? "📱 ĐANG CẦM ĐIỆN THOẠI" : "📱 KHÔNG cầm điện thoại";
+  }
+
+  Color _getProximityColor(bool isProximityDetected) {
+    return isProximityDetected ? Colors.blue.shade700 : Colors.grey.shade700;
   }
 
   void _onEvent(dynamic event) {
@@ -144,12 +153,22 @@ class _MonitorScreenState extends State<MonitorScreen> {
 
         if (monitorEvent.type == 'TILT_EVENT') {
           _latestTiltEvent = monitorEvent;
-          // Cập nhật tilt trung bình khi có dữ liệu mới
           if (monitorEvent.tiltValue != null) {
             _updateTiltAverage(monitorEvent.tiltValue!);
           }
+          // 🆕 CẬP NHẬT: Trạng thái cảm biến tiệm cận từ sự kiện tilt
+          if (monitorEvent.isProximityDetected != null) {
+            _isProximityDetected = monitorEvent.isProximityDetected!;
+          }
         } else if (monitorEvent.type == 'DANGER_EVENT') {
           _latestDangerEvent = monitorEvent;
+          _historyEvents.insert(0, monitorEvent);
+        } else if (monitorEvent.type == 'PROXIMITY_EVENT') {
+          // 🆕 MỚI: Xử lý sự kiện cảm biến tiệm cận
+          _latestProximityEvent = monitorEvent;
+          if (monitorEvent.isProximityDetected != null) {
+            _isProximityDetected = monitorEvent.isProximityDetected!;
+          }
           _historyEvents.insert(0, monitorEvent);
         } else if (monitorEvent.type == 'DRIVING_STATUS' || monitorEvent.type == 'LOCATION_UPDATE') {
           _currentSpeed = monitorEvent.speed ?? 0.0;
@@ -220,10 +239,18 @@ class _MonitorScreenState extends State<MonitorScreen> {
               'Thời gian: ${_latestDangerEvent!.timestamp.toString().substring(11, 19)}',
               style: const TextStyle(color: Colors.white70, fontSize: 12),
             ),
-            // Hiển thị tilt trung bình khi cảnh báo
             Text(
               'Tilt trung bình: ${_averageTiltPercent.toStringAsFixed(1)}%',
               style: const TextStyle(color: Colors.white70, fontSize: 12),
+            ),
+            // 🆕 THÊM: Hiển thị trạng thái cảm biến tiệm cận trong cảnh báo
+            Text(
+              'Cảm biến tiệm cận: ${_isProximityDetected ? "PHÁT HIỆN" : "KHÔNG"}',
+              style: TextStyle(
+                color: _isProximityDetected ? Colors.yellow : Colors.white70,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
             ),
           ],
         ),
@@ -284,11 +311,83 @@ class _MonitorScreenState extends State<MonitorScreen> {
     );
   }
 
+  // 🆕 THÊM: Card hiển thị trạng thái cảm biến tiệm cận
+  Widget _buildProximitySensorCard() {
+    final String proximityStatus = _getProximityStatus(_isProximityDetected);
+    final Color proximityColor = _getProximityColor(_isProximityDetected);
+
+    return Card(
+      elevation: 6,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  _isProximityDetected ? Icons.sensors : Icons.sensors_off,
+                  color: proximityColor,
+                  size: 30,
+                ),
+                const SizedBox(width: 10),
+                const Text(
+                  'Cảm Biến Tiệm Cận',
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+              ],
+            ),
+            const Divider(color: Colors.white10, height: 20),
+            
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: proximityColor.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: proximityColor, width: 2),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    _isProximityDetected ? Icons.touch_app : Icons.do_not_touch,
+                    color: proximityColor,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      proximityStatus,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: proximityColor,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            
+            const SizedBox(height: 12),
+            Text(
+              'Trạng thái: ${_isProximityDetected ? "CÓ vật gần mặt trước" : "KHÔNG có vật gần"}',
+              style: const TextStyle(fontSize: 14, color: Colors.white70),
+            ),
+            if (_latestProximityEvent != null)
+              Text(
+                'Cập nhật: ${_latestProximityEvent!.timestamp.toString().substring(11, 19)}',
+                style: const TextStyle(fontSize: 12, color: Colors.white54),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildTiltMonitorCard() {
     final double tiltValue = _latestTiltEvent?.tiltValue ?? 0.0;
     final String tiltMessage = _latestTiltEvent?.message ?? 'Chờ dữ liệu...';
     
-    // 🎯 CẬP NHẬT: Sử dụng tilt trung bình và ngưỡng mới
     final String tiltStatus = _getTiltStatus(_averageTiltPercent);
     final Color tiltColor = _getTiltColor(_averageTiltPercent);
 
@@ -312,7 +411,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
             ),
             const Divider(color: Colors.white10, height: 20),
             
-            // 🎯 CẬP NHẬT: Hiển thị trạng thái tilt theo ngưỡng mới (không có %)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(
@@ -355,6 +453,15 @@ class _MonitorScreenState extends State<MonitorScreen> {
                 color: tiltColor,
               ),
             ),
+            // 🆕 THÊM: Hiển thị trạng thái cảm biến tiệm cận trong card tilt
+            Text(
+              'Cảm biến tiệm cận: ${_isProximityDetected ? "ĐANG CẦM" : "KHÔNG cầm"}',
+              style: TextStyle(
+                fontSize: 14,
+                color: _isProximityDetected ? Colors.blue.shade300 : Colors.grey.shade400,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
             const SizedBox(height: 8),
             Text(
               'Trạng Thái: $tiltMessage',
@@ -384,6 +491,10 @@ class _MonitorScreenState extends State<MonitorScreen> {
         if (event.location != null) {
           subtitle += '\nVị trí: ${event.location}';
         }
+        // 🆕 THÊM: Hiển thị trạng thái cảm biến tiệm cận
+        if (event.isProximityDetected != null) {
+          subtitle += '\nCảm biến: ${event.isProximityDetected! ? "CÓ vật" : "KHÔNG"}';
+        }
         break;
       
       case 'DANGER_EVENT':
@@ -396,6 +507,16 @@ class _MonitorScreenState extends State<MonitorScreen> {
           double tiltPercent = (event.tiltValue!.abs() / (pi / 2)) * 100.0;
           subtitle += '\nTilt: ${tiltPercent.toStringAsFixed(1)}%';
         }
+        // 🆕 THÊM: Hiển thị trạng thái cảm biến tiệm cận
+        if (event.isProximityDetected != null) {
+          subtitle += '\nĐang cầm: ${event.isProximityDetected! ? "CÓ" : "KHÔNG"}';
+        }
+        break;
+      
+      case 'PROXIMITY_EVENT': // 🆕 MỚI: Xử lý sự kiện cảm biến tiệm cận
+        eventColor = event.isProximityDetected == true ? Colors.blue.shade400 : Colors.grey.shade400;
+        icon = event.isProximityDetected == true ? Icons.sensors : Icons.sensors_off;
+        subtitle += '\nTrạng thái: ${event.isProximityDetected == true ? "CÓ vật gần" : "KHÔNG có vật"}';
         break;
       
       case 'DRIVING_STATUS':
@@ -456,7 +577,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 4.0),
             child: Text(
-              'Trạng thái kênh: $_connectionStatus | Tilt trung bình: ${_averageTiltPercent.toStringAsFixed(1)}%',
+              'Trạng thái kênh: $_connectionStatus | Tilt: ${_averageTiltPercent.toStringAsFixed(1)}% | Cảm biến: ${_isProximityDetected ? "CÓ" : "KHÔNG"}',
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 12, color: Colors.white70),
             ),
@@ -475,6 +596,12 @@ class _MonitorScreenState extends State<MonitorScreen> {
             child: Padding(
               padding: const EdgeInsets.all(12.0),
               child: _buildDrivingStatusCard(),
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.all(12.0),
+              child: _buildProximitySensorCard(), // 🆕 THÊM: Card cảm biến tiệm cận
             ),
           ),
           SliverToBoxAdapter(
