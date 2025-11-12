@@ -23,10 +23,11 @@ class MonitorEvent {
   final double? zStability;
   final DateTime timestamp;
   
-  // 🆕 THÊM 3 TRƯỜNG MỚI
   final bool? isActiveBrowsing;
   final double? estimatedWebTraffic;
   final double? estimatedLocationTraffic;
+  final double? networkUploadSpeed;
+  final double? networkDownloadSpeed;
 
   MonitorEvent({
     required this.type,
@@ -39,10 +40,11 @@ class MonitorEvent {
     this.isNetworkActive,
     this.zStability,
     required this.timestamp,
-    // 🆕 THÊM 3 TRƯỜNG MỚI
     this.isActiveBrowsing,
     this.estimatedWebTraffic,
     this.estimatedLocationTraffic,
+    this.networkUploadSpeed,
+    this.networkDownloadSpeed,
   });
 
   factory MonitorEvent.fromJson(Map<String, dynamic> json) {
@@ -57,10 +59,11 @@ class MonitorEvent {
       isNetworkActive: json['isNetworkActive'] as bool?,
       zStability: json['zStability'] as double?,
       timestamp: DateTime.fromMillisecondsSinceEpoch(json['timestamp'] as int),
-      // 🆕 THÊM 3 TRƯỜNG MỚI
       isActiveBrowsing: json['isActiveBrowsing'] as bool?,
       estimatedWebTraffic: json['estimatedWebTraffic'] as double?,
       estimatedLocationTraffic: json['estimatedLocationTraffic'] as double?,
+      networkUploadSpeed: json['networkUploadSpeed'] as double?,
+      networkDownloadSpeed: json['networkDownloadSpeed'] as double?,
     );
   }
 }
@@ -99,14 +102,19 @@ class _MonitorScreenState extends State<MonitorScreen> {
   double _currentSpeed = 0.0;
   bool _isDriving = false;
   bool _isNetworkActive = false;
-  bool _isActiveBrowsing = false; // 🆕 Trạng thái lướt web
+  bool _isActiveBrowsing = false;
+  double _networkUploadSpeed = 0.0;
+  double _networkDownloadSpeed = 0.0;
 
-  // 🎯 CẬP NHẬT: Lưu trữ lịch sử tilt để tính trung bình 3s
+  // 🆕 THÊM BIẾN DEBOUNCE
+  bool _isUpdating = false;
+
+  // 🎯 Lưu trữ lịch sử tilt để tính trung bình 3s
   final List<double> _tiltHistory = [];
-  static const int _tiltBufferSize = 30; // 30 mẫu * 100ms = 3 giây
+  static const int _tiltBufferSize = 30;
   double _averageTiltPercent = 0.0;
 
-  // 🎯 THÊM: Biến lưu trạng thái tilt hiện tại (đồng bộ)
+  // Biến lưu trạng thái tilt hiện tại (đồng bộ)
   String _currentTiltStatus = "Chờ dữ liệu...";
   Color _currentTiltColor = Colors.grey;
 
@@ -124,46 +132,48 @@ class _MonitorScreenState extends State<MonitorScreen> {
     );
   }
 
-  // 🎯 CẬP NHẬT: Hàm tính tilt trung bình 3s
+  // Hàm tính tilt trung bình 3s
   void _updateTiltAverage(double tiltPercent) {
     _tiltHistory.add(tiltPercent);
     if (_tiltHistory.length > _tiltBufferSize) {
       _tiltHistory.removeAt(0);
     }
 
-    // Tính trung bình 3s
     if (_tiltHistory.isNotEmpty) {
       _averageTiltPercent = _tiltHistory.reduce((a, b) => a + b) / _tiltHistory.length;
     }
 
-    // 🎯 CẬP NHẬT ĐỒNG BỘ: Cập nhật trạng thái tilt ngay lập tức
     _currentTiltStatus = _getTiltStatus(_averageTiltPercent);
     _currentTiltColor = _getTiltColor(_averageTiltPercent);
   }
 
-  // 🎯 CẬP NHẬT: Hàm xác định trạng thái tilt theo ngưỡng mới
+  // Hàm xác định trạng thái tilt theo ngưỡng mới
   String _getTiltStatus(double tiltPercent) {
-    if (tiltPercent <= 55.0) {
+    if (tiltPercent <= 80.0) {
       return "📱 ĐANG XEM";
-    } else if (tiltPercent < 65.0) {
+    } else if (tiltPercent < 90.0) {
       return "⚡ TRUNG GIAN";
     } else {
       return "🔼 KHÔNG XEM";
     }
   }
 
-  // 🎯 CẬP NHẬT: Hàm xác định màu sắc theo trạng thái tilt mới
+  // Hàm xác định màu sắc theo trạng thái tilt mới
   Color _getTiltColor(double tiltPercent) {
-    if (tiltPercent <= 55.0) {
-      return Colors.red.shade700; // ĐANG XEM - ĐỎ
-    } else if (tiltPercent < 65.0) {
-      return Colors.orange.shade700; // TRUNG GIAN - CAM
+    if (tiltPercent <= 80.0) {
+      return Colors.red.shade700;
+    } else if (tiltPercent < 90.0) {
+      return Colors.orange.shade700;
     } else {
-      return Colors.green.shade700; // KHÔNG XEM - XANH
+      return Colors.green.shade700;
     }
   }
 
   void _onEvent(dynamic event) {
+    // 🆕 THÊM DEBOUNCE - tránh update quá nhiều
+    if (_isUpdating) return;
+    _isUpdating = true;
+    
     setState(() {
       _connectionStatus = "Đã kết nối";
       try {
@@ -172,11 +182,9 @@ class _MonitorScreenState extends State<MonitorScreen> {
 
         if (monitorEvent.type == 'TILT_EVENT') {
           _latestTiltEvent = monitorEvent;
-          // Cập nhật tilt trung bình khi có dữ liệu mới
           if (monitorEvent.tiltPercent != null) {
             _updateTiltAverage(monitorEvent.tiltPercent!);
           }
-          // 🆕 Cập nhật trạng thái lướt web
           if (monitorEvent.isActiveBrowsing != null) {
             _isActiveBrowsing = monitorEvent.isActiveBrowsing!;
           }
@@ -187,8 +195,9 @@ class _MonitorScreenState extends State<MonitorScreen> {
           _isNetworkActive = monitorEvent.isNetworkActive ?? false;
           _historyEvents.insert(0, monitorEvent);
         } else if (monitorEvent.type == 'TRAFFIC_ANALYSIS') {
-          // 🆕 Cập nhật phân tích traffic
           _isActiveBrowsing = monitorEvent.isActiveBrowsing ?? false;
+          _networkUploadSpeed = monitorEvent.networkUploadSpeed ?? 0.0;
+          _networkDownloadSpeed = monitorEvent.networkDownloadSpeed ?? 0.0;
           _historyEvents.insert(0, monitorEvent);
         } else if (monitorEvent.type == 'DRIVING_STATUS' || monitorEvent.type == 'LOCATION_UPDATE') {
           _currentSpeed = monitorEvent.speed ?? 0.0;
@@ -201,6 +210,11 @@ class _MonitorScreenState extends State<MonitorScreen> {
         _connectionStatus = "Lỗi phân tích JSON: $e";
         print('Error decoding JSON: $e, Raw event: $event');
       }
+    });
+    
+    // 🆕 RESET DEBOUNCE SAU 50ms
+    Future.delayed(Duration(milliseconds: 50), () {
+      _isUpdating = false;
     });
   }
 
@@ -259,10 +273,9 @@ class _MonitorScreenState extends State<MonitorScreen> {
               'Thời gian: ${_latestDangerEvent!.timestamp.toString().substring(11, 19)}',
               style: const TextStyle(color: Colors.white70, fontSize: 12),
             ),
-            // Hiển thị thông tin chi tiết
             if (_latestDangerEvent!.tiltPercent != null)
               Text(
-                'Tilt: ${_latestDangerEvent!.tiltPercent!.toStringAsFixed(1)}% | Web: ${_isActiveBrowsing ? "Đang lướt" : "Không lướt"}',
+                'Tilt: ${_latestDangerEvent!.tiltPercent!.toStringAsFixed(1)}% | Web: ${_isActiveBrowsing ? "Đang lướt" : "Không lướt"} | Tốc độ: ${_currentSpeed.toStringAsFixed(1)} km/h',
                 style: const TextStyle(color: Colors.white70, fontSize: 12),
               ),
           ],
@@ -324,11 +337,88 @@ class _MonitorScreenState extends State<MonitorScreen> {
     );
   }
 
+  Widget _buildNetworkTrafficCard() {
+    return Card(
+      elevation: 4,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      color: _isActiveBrowsing ? Colors.blue.shade900 : Colors.grey.shade800,
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  _isActiveBrowsing ? Icons.network_check : Icons.network_wifi,
+                  color: _isActiveBrowsing ? Colors.blue.shade200 : Colors.grey.shade400,
+                  size: 30,
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  _isActiveBrowsing ? 'ĐANG LƯỚT WEB' : 'KHÔNG LƯỚT WEB',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: _isActiveBrowsing ? Colors.blue.shade200 : Colors.grey.shade400,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                Column(
+                  children: [
+                    Icon(Icons.upload, color: Colors.green.shade400, size: 24),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Upload\n${_networkUploadSpeed.toStringAsFixed(1)} KB/s',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.green.shade400,
+                      ),
+                    ),
+                  ],
+                ),
+                Column(
+                  children: [
+                    Icon(Icons.download, color: Colors.orange.shade400, size: 24),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Download\n${_networkDownloadSpeed.toStringAsFixed(1)} KB/s',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.orange.shade400,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _isActiveBrowsing 
+                  ? 'Đang có hoạt động lướt web đáng kể'
+                  : 'Không có hoạt động web đáng kể',
+              style: const TextStyle(
+                fontSize: 14,
+                color: Colors.white70,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildTiltMonitorCard() {
     final double tiltValue = _latestTiltEvent?.tiltValue ?? 0.0;
     final String tiltMessage = _latestTiltEvent?.message ?? 'Chờ dữ liệu...';
     
-    // 🎯 CẬP NHẬT ĐỒNG BỘ: Sử dụng trạng thái tilt đã được đồng bộ
     final String tiltStatus = _currentTiltStatus;
     final Color tiltColor = _currentTiltColor;
 
@@ -352,7 +442,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
             ),
             const Divider(color: Colors.white10, height: 20),
             
-            // 🎯 CẬP NHẬT ĐỒNG BỘ: Hiển thị trạng thái tilt đã được đồng bộ
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(
@@ -363,14 +452,14 @@ class _MonitorScreenState extends State<MonitorScreen> {
               child: Row(
                 children: [
                   Icon(
-                    _averageTiltPercent <= 55.0 ? Icons.warning : 
-                    _averageTiltPercent < 65.0 ? Icons.info : Icons.check_circle,
+                    _averageTiltPercent <= 80.0 ? Icons.warning : 
+                    _averageTiltPercent < 90.0 ? Icons.info : Icons.check_circle,
                     color: tiltColor,
                   ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      tiltStatus, // Sử dụng trạng thái đã đồng bộ
+                      tiltStatus,
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.bold,
@@ -400,7 +489,11 @@ class _MonitorScreenState extends State<MonitorScreen> {
               'Trạng Thái: $tiltMessage',
               style: const TextStyle(fontSize: 14, color: Colors.white70),
             ),
-            // 🆕 Hiển thị trạng thái mạng và lướt web
+            // 🆕 THÊM HIỂN THỊ ĐỘ ỔN ĐỊNH
+            Text(
+              'Độ Ổn Định Z: ${_latestTiltEvent?.zStability?.toStringAsFixed(3) ?? "N/A"}',
+              style: const TextStyle(fontSize: 12, color: Colors.white60),
+            ),
             Row(
               children: [
                 Text(
@@ -452,7 +545,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // 🎯 CẬP NHẬT ĐỒNG BỘ: Trạng thái tilt (giống trong card)
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             decoration: BoxDecoration(
@@ -463,14 +555,14 @@ class _MonitorScreenState extends State<MonitorScreen> {
             child: Row(
               children: [
                 Icon(
-                  _averageTiltPercent <= 55.0 ? Icons.phone_android : 
-                  _averageTiltPercent < 65.0 ? Icons.phone_iphone : Icons.phone_disabled,
+                  _averageTiltPercent <= 80.0 ? Icons.phone_android : 
+                  _averageTiltPercent < 90.0 ? Icons.phone_iphone : Icons.phone_disabled,
                   color: _currentTiltColor,
                   size: 16,
                 ),
                 const SizedBox(width: 6),
                 Text(
-                  _currentTiltStatus, // Sử dụng trạng thái đã đồng bộ
+                  _currentTiltStatus,
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
@@ -481,7 +573,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
             ),
           ),
           
-          // Trạng thái lái xe
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             decoration: BoxDecoration(
@@ -512,7 +603,6 @@ class _MonitorScreenState extends State<MonitorScreen> {
             ),
           ),
           
-          // Trạng thái web
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             decoration: BoxDecoration(
@@ -590,15 +680,15 @@ class _MonitorScreenState extends State<MonitorScreen> {
         subtitle += '\nTrạng thái mạng';
         break;
 
-      // 🆕 CASE MỚI: Phân tích traffic
       case 'TRAFFIC_ANALYSIS':
         eventColor = event.isActiveBrowsing == true ? Colors.blue.shade400 : Colors.grey.shade400;
         icon = event.isActiveBrowsing == true ? Icons.web : Icons.web_asset;
+        subtitle += '\nWeb: ${event.isActiveBrowsing == true ? "Đang lướt" : "Không lướt"}';
         if (event.estimatedWebTraffic != null) {
           subtitle += '\nWeb Traffic: ${event.estimatedWebTraffic!.toStringAsFixed(1)}KB';
         }
-        if (event.estimatedLocationTraffic != null) {
-          subtitle += '\nLocation Traffic: ${event.estimatedLocationTraffic!.toStringAsFixed(1)}KB';
+        if (event.networkUploadSpeed != null && event.networkDownloadSpeed != null) {
+          subtitle += '\n↑${event.networkUploadSpeed!.toStringAsFixed(1)}KB/s ↓${event.networkDownloadSpeed!.toStringAsFixed(1)}KB/s';
         }
         break;
       
@@ -649,9 +739,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
           preferredSize: const Size.fromHeight(48.0),
           child: Column(
             children: [
-              // Thanh trạng thái thiết bị
               _buildStatusBar(),
-              // Trạng thái kết nối
               Container(
                 color: Colors.white12,
                 width: double.infinity,
@@ -666,64 +754,77 @@ class _MonitorScreenState extends State<MonitorScreen> {
           ),
         ),
       ),
-      body: CustomScrollView(
-        slivers: [
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.all(12.0),
-              child: _buildDangerAlertCard(),
+      body: RefreshIndicator(
+        onRefresh: () async {
+          setState(() {
+            // Làm mới dữ liệu khi kéo xuống
+          });
+        },
+        child: CustomScrollView(
+          slivers: [
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.all(12.0),
+                child: _buildDangerAlertCard(),
+              ),
             ),
-          ),
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.all(12.0),
-              child: _buildDrivingStatusCard(),
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.all(12.0),
+                child: _buildDrivingStatusCard(),
+              ),
             ),
-          ),
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.all(12.0),
-              child: _buildTiltMonitorCard(),
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.all(12.0),
+                child: _buildNetworkTrafficCard(),
+              ),
             ),
-          ),
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.only(left: 16.0, right: 16.0, top: 10.0, bottom: 8.0),
-              child: Text(
-                'Lịch Sử Sự Kiện',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w500,
-                  color: Colors.blueAccent,
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.all(12.0),
+                child: _buildTiltMonitorCard(),
+              ),
+            ),
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.only(left: 16.0, right: 16.0, top: 10.0, bottom: 8.0),
+                child: Text(
+                  'Lịch Sử Sự Kiện',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w500,
+                    color: Colors.blueAccent,
+                  ),
                 ),
               ),
             ),
-          ),
-          _historyEvents.isEmpty
-              ? SliverToBoxAdapter(
-                  child: Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(32.0),
-                      child: Text(
-                        'Chưa có sự kiện nào được ghi lại.',
-                        style: TextStyle(color: Colors.white70, fontSize: 16),
-                        textAlign: TextAlign.center,
+            _historyEvents.isEmpty
+                ? SliverToBoxAdapter(
+                    child: Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(32.0),
+                        child: Text(
+                          'Chưa có sự kiện nào được ghi lại.',
+                          style: TextStyle(color: Colors.white70, fontSize: 16),
+                          textAlign: TextAlign.center,
+                        ),
                       ),
                     ),
+                  )
+                : SliverList(
+                    delegate: SliverChildBuilderDelegate(
+                      (context, index) {
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12.0),
+                          child: _buildEventTile(_historyEvents[index]),
+                        );
+                      },
+                      childCount: _historyEvents.length,
+                    ),
                   ),
-                )
-              : SliverList(
-                  delegate: SliverChildBuilderDelegate(
-                    (context, index) {
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12.0),
-                        child: _buildEventTile(_historyEvents[index]),
-                      );
-                    },
-                    childCount: _historyEvents.length,
-                  ),
-                ),
-        ],
+          ],
+        ),
       ),
     );
   }
