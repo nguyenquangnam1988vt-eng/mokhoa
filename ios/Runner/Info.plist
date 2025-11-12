@@ -55,6 +55,12 @@
     <!-- 5. Quyền Network (WiFi info) -->
     <key>NSLocalNetworkUsageDescription</key>
     <string>Ứng dụng cần truy cập thông tin mạng để theo dõi lưu lượng và tốc độ kết nối để cảnh báo lái xe không lướt mạng</string>
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+    <string>Ứng dụng cần truy cập vị trí để theo dõi tốc độ và phát hiện trạng thái lái xe</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Ứng dụng cần truy cập vị trí để theo dõi tốc độ và phát hiện trạng thái lái xe</string>
+    <key>NSLocationAlwaysUsageDescription</key>
+    <string>Ứng dụng cần truy cập vị trí ngay cả khi ở chế độ nền để theo dõi trạng thái lái xe</string>
     
     <key>UIBackgroundModes</key>
     <array>
