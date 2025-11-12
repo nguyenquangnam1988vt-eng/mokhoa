@@ -22,8 +22,8 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
     
     // 🎯 NETWORK DETECTION - CẬP NHẬT
     private var networkCongestionDetector: NetworkCongestionDetector?
-    private var isActiveBrowsing = false
     private var realNetworkMonitor: RealNetworkMonitor?
+    private var isActiveBrowsing = false
     
     // Ngưỡng
     private let drivingSpeedThreshold: Double = 10.0
@@ -42,7 +42,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         super.init()
         setupNetworkMonitoring()
         setupNetworkCongestionDetection()
-        setupRealNetworkMonitoring() // 🆚 THÊM REAL NETWORK MONITORING
+        setupRealNetworkMonitoring()
     }
     
     // MARK: - FlutterStreamHandler Methods
@@ -66,7 +66,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         setupTiltMonitoring()
         setupLockUnlockObservers()
         networkCongestionDetector?.startMonitoring()
-        realNetworkMonitor?.startMonitoring() // 🆚 BẮT ĐẦU REAL MONITORING
+        realNetworkMonitor?.startMonitoring()
         
         print("Unlock Monitor: Đã đăng ký và bắt đầu theo dõi.")
     }
@@ -76,11 +76,11 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         locationManager?.stopUpdatingLocation()
         networkMonitor?.cancel()
         networkCongestionDetector?.stopMonitoring()
-        realNetworkMonitor?.stopMonitoring() // 🆚 DỪNG REAL MONITORING
+        realNetworkMonitor?.stopMonitoring()
         NotificationCenter.default.removeObserver(self)
     }
     
-    // 🎯 REAL NETWORK MONITORING - PHÁT HIỆN THỰC TẾ
+    // 🎯 REAL NETWORK MONITORING - CẬP NHẬT PHÂN BIỆT LOCATION/WEB
     private func setupRealNetworkMonitoring() {
         realNetworkMonitor = RealNetworkMonitor()
         realNetworkMonitor?.onNetworkActivityDetected = { [weak self] isActive, activityType in
@@ -106,7 +106,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         }
     }
     
-    // 🎯 NETWORK CONGESTION DETECTION - CẬP NHẬT
+    // 🎯 NETWORK CONGESTION DETECTION - CẬP NHẬT PHÂN BIỆT LOCATION/WEB
     private func setupNetworkCongestionDetection() {
         networkCongestionDetector = NetworkCongestionDetector()
         networkCongestionDetector?.onNetworkStatusUpdate = { [weak self] isBrowsing in
@@ -353,6 +353,46 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         self.sendEventToFlutter(updateData)
     }
     
+    // MARK: - CLLocationManagerDelegate
+    
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard let location = locations.last else { return }
+        
+        let speed = location.speed >= 0 ? location.speed : 0.0
+        updateDrivingStatus(speed: speed)
+        
+        // 🎯 THÔNG BÁO CHO CẢ HAI NETWORK MONITORS BIẾT ĐÂY LÀ LOCATION UPDATE
+        realNetworkMonitor?.notifyLocationUpdate()
+        networkCongestionDetector?.setLocationUpdateCooldown()
+        
+        let locationData: [String: Any] = [
+            "type": "LOCATION_UPDATE",
+            "latitude": location.coordinate.latitude,
+            "longitude": location.coordinate.longitude,
+            "speed": currentSpeed,
+            "isDriving": isDriving,
+            "timestamp": Int(location.timestamp.timeIntervalSince1970 * 1000)
+        ]
+        
+        self.sendEventToFlutter(locationData)
+        lastLocation = location
+    }
+    
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        print("❌ Location Manager Error: \(error.localizedDescription)")
+    }
+    
+    func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
+        print("📍 Location Authorization Changed: \(status.rawValue)")
+        
+        switch status {
+        case .authorizedAlways, .authorizedWhenInUse:
+            locationManager?.startUpdatingLocation()
+        default:
+            break
+        }
+    }
+    
     // MARK: - Lock/Unlock Observers
     
     private func setupLockUnlockObservers() {
@@ -417,43 +457,6 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         print("🔒 Device LOCKED at \(formatTime(lockTime)) - Speed: \(currentSpeed) km/h")
     }
     
-    // MARK: - CLLocationManagerDelegate
-    
-    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard let location = locations.last else { return }
-        
-        let speed = location.speed >= 0 ? location.speed : 0.0
-        updateDrivingStatus(speed: speed)
-        
-        let locationData: [String: Any] = [
-            "type": "LOCATION_UPDATE",
-            "latitude": location.coordinate.latitude,
-            "longitude": location.coordinate.longitude,
-            "speed": currentSpeed,
-            "isDriving": isDriving,
-            "timestamp": Int(location.timestamp.timeIntervalSince1970 * 1000)
-        ]
-        
-        self.sendEventToFlutter(locationData)
-        
-        lastLocation = location
-    }
-    
-    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        print("❌ Location Manager Error: \(error.localizedDescription)")
-    }
-    
-    func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
-        print("📍 Location Authorization Changed: \(status.rawValue)")
-        
-        switch status {
-        case .authorizedAlways, .authorizedWhenInUse:
-            locationManager?.startUpdatingLocation()
-        default:
-            break
-        }
-    }
-    
     // MARK: - Flutter Communication
     
     private func sendEventToFlutter(_ data: [String: Any]) {
@@ -498,24 +501,23 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
     }
 }
 
-// 🎯 REAL NETWORK MONITOR - PHÁT HIỆN THỰC TẾ
+// 🎯 REAL NETWORK MONITOR - CẬP NHẬT PHÂN BIỆT LOCATION/WEB
 class RealNetworkMonitor {
     private var timer: Timer?
     private var lastNetworkStats: NetworkInterfaceStats?
     private var activitySamples: [Bool] = []
     private let sampleSize = 5
+    private var locationUpdateCooldown: Date? // 🆚 THÊM COOLDOWN
     
     var onNetworkActivityDetected: ((Bool, String) -> Void)?
     
     func startMonitoring() {
         stopMonitoring()
         
-        // 🎯 KIỂM TRA MỖI 3 GIÂY
         timer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
             self?.checkRealNetworkActivity()
         }
         
-        // 🎯 CHO PHÉP TIMER CHẠY TRONG BACKGROUND
         if let timer = timer {
             RunLoop.current.add(timer, forMode: .common)
         }
@@ -528,18 +530,32 @@ class RealNetworkMonitor {
         timer = nil
     }
     
+    // 🆚 THÊM METHOD CHO LOCATION COOLDOWN
+    func notifyLocationUpdate() {
+        locationUpdateCooldown = Date()
+        print("📍 Real Network Monitor: Location update cooldown activated")
+    }
+    
     private func checkRealNetworkActivity() {
+        // 🎯 KIỂM TRA COOLDOWN - TRÁNH DETECTION SAU LOCATION UPDATE
+        if let cooldown = locationUpdateCooldown, Date().timeIntervalSince(cooldown) < 2.0 {
+            // 🎯 Đang trong cooldown - không detect web activity
+            print("📍 Real Network Monitor: Skipping detection - location cooldown active")
+            DispatchQueue.main.async {
+                self.onNetworkActivityDetected?(false, "Location Update")
+            }
+            return
+        }
+        
         let currentStats = getCurrentNetworkStats()
         let isActive = detectRealNetworkActivity(currentStats: currentStats)
         let activityType = determineActivityType(currentStats: currentStats)
         
-        // 🎯 LƯU MẪU ĐỂ TRÁNH FALSE POSITIVE
         activitySamples.append(isActive)
         if activitySamples.count > sampleSize {
             activitySamples.removeFirst()
         }
         
-        // 🎯 CHỈ BÁO CÁO NẾU CÓ NHIỀU MẪU ACTIVITY
         let confirmedActive = activitySamples.filter { $0 }.count >= 3
         
         DispatchQueue.main.async {
@@ -563,9 +579,6 @@ class RealNetworkMonitor {
         // 🎯 METHOD 2: URLSESSION ACTIVE TASKS
         stats.activeConnections = getActiveURLSessionTasks()
         
-        // 🎯 METHOD 3: SYSTEM NETWORK INDICATORS
-        stats.isNetworkIndicatorVisible = isNetworkActivityIndicatorVisible()
-        
         return stats
     }
     
@@ -583,11 +596,8 @@ class RealNetworkMonitor {
                            (currentStats.bytesSent - lastStats.bytesSent) > 500
         }
         
-        // 🎯 ĐIỀU KIỆN 4: NETWORK ACTIVITY INDICATOR
-        let hasSystemIndicator = currentStats.isNetworkIndicatorVisible
-        
-        // 🎯 CHỈ CẦN 1 TRONG 4 ĐIỀU KIỆN
-        return hasSignificantTraffic || hasActiveConnections || hasNewTraffic || hasSystemIndicator
+        // 🎯 CHỈ CẦN 1 TRONG 3 ĐIỀU KIỆN
+        return hasSignificantTraffic || hasActiveConnections || hasNewTraffic
     }
     
     private func determineActivityType(currentStats: NetworkInterfaceStats) -> String {
@@ -639,12 +649,6 @@ class RealNetworkMonitor {
         // 🎯 CÓ THỂ MỞ RỘNG ĐỂ KIỂM TRA CÁC ACTIVE NETWORK TASKS
         return 0 // Tạm thời return 0
     }
-    
-    // 🎯 KIỂM TRA NETWORK ACTIVITY INDICATOR
-    private func isNetworkActivityIndicatorVisible() -> Bool {
-        // 🎯 TRÊN iOS, CÓ THỂ KIỂM TRA NETWORK ACTIVITY INDICATOR
-        return false // Tạm thời return false
-    }
 }
 
 // 🎯 NETWORK STATS STRUCT
@@ -654,16 +658,16 @@ struct NetworkInterfaceStats {
     var packetsReceived: Int = 0
     var hasActiveInterface: Bool = false
     var activeConnections: Int = 0
-    var isNetworkIndicatorVisible: Bool = false
 }
 
-// 🎯 NETWORK CONGESTION DETECTOR CLASS - CẬP NHẬT
+// 🎯 NETWORK CONGESTION DETECTOR CLASS - CẬP NHẬT PHÂN BIỆT LOCATION/WEB
 class NetworkCongestionDetector {
     private var pingTimer: Timer?
     private var latencySamples: [Double] = []
     private var packetLossSamples: [Bool] = []
     private var requestCount = 0
     private var lastRequestTime: Date?
+    private var locationUpdateCooldown: Date? // 🆚 THÊM COOLDOWN
     
     private let sampleSize = 10
     private let pingTargets = ["8.8.8.8", "1.1.1.1", "208.67.222.222"]
@@ -683,7 +687,19 @@ class NetworkCongestionDetector {
         pingTimer = nil
     }
     
+    // 🆚 THÊM METHOD CHO LOCATION COOLDOWN
+    func setLocationUpdateCooldown() {
+        locationUpdateCooldown = Date()
+        print("📍 Network Congestion Detector: Location update cooldown activated")
+    }
+    
     private func performNetworkAnalysis() {
+        // 🎯 KIỂM TRA COOLDOWN TRƯỚC KHI PHÂN TÍCH
+        if let cooldown = locationUpdateCooldown, Date().timeIntervalSince(cooldown) < 3.0 {
+            print("📍 Network Congestion Detector: Skipping analysis - location cooldown active")
+            return
+        }
+        
         measureNetworkCongestion { [weak self] latency, packetLoss in
             guard let self = self else { return }
             
@@ -737,15 +753,22 @@ class NetworkCongestionDetector {
     }
     
     private func detectWebBrowsingActivity() -> Bool {
+        // 🎯 KIỂM TRA COOLDOWN LẦN NỮA
+        if let cooldown = locationUpdateCooldown, Date().timeIntervalSince(cooldown) < 3.0 {
+            return false
+        }
+        
         let requestRate = calculateRequestRate()
         let hasBurstPattern = detectBurstPattern()
         let hasHighLatency = detectHighLatency()
         
-        // 🎯 THÊM ĐIỀU KIỆN PHÁT HIỆN HOẠT ĐỘNG LIÊN TỤC
+        // 🎯 THÊM ĐIỀU KIỆN PHÂN BIỆT WEB VS LOCATION
         let hasContinuousActivity = detectContinuousNetworkActivity()
+        let isWebLikePattern = isWebTrafficPattern()
         
-        // 🎯 HOẶC có burst pattern HOẶC có continuous activity
-        return (requestRate > 2.0 && hasBurstPattern) || hasContinuousActivity
+        // 🎯 WEB: burst pattern HOẶC continuous activity + web-like pattern
+        return (requestRate > 2.0 && hasBurstPattern) || 
+               (hasContinuousActivity && isWebLikePattern)
     }
     
     private func calculateRequestRate() -> Double {
@@ -773,11 +796,16 @@ class NetworkCongestionDetector {
     }
     
     private func detectContinuousNetworkActivity() -> Bool {
-        // 🎯 PHÁT HIỆN HOẠT ĐỘNG MẠNG KÉO DÀI
         guard let lastRequest = lastRequestTime else { return false }
         let timeSinceLastRequest = Date().timeIntervalSince(lastRequest)
-        
-        // 🎯 NẾU CÓ REQUEST TRONG 15 GIÂY VÀ TỔNG SỐ REQUEST CAO
         return timeSinceLastRequest < 15.0 && requestCount > 5
+    }
+    
+    private func isWebTrafficPattern() -> Bool {
+        // 🎯 PHÂN BIỆT WEB TRAFFIC VS LOCATION TRAFFIC
+        // Location: request đều đặn, nhỏ, predictable
+        // Web: request burst, kích thước biến đổi, user-initiated
+        
+        return requestCount > 3 // 🎯 Đơn giản hóa
     }
 }
