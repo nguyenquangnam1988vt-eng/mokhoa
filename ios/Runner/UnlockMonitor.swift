@@ -4,6 +4,7 @@ import UIKit
 import UserNotifications
 import Flutter
 import Network
+import SystemConfiguration
 
 @objcMembers
 class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
@@ -19,14 +20,15 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
     private var isNetworkActive = false
     private var lastDangerAlertTime: Date?
     
-    // 🎯 NETWORK CONGESTION DETECTOR - CHỈ GIỮ LẠI isActiveBrowsing
+    // 🎯 NETWORK DETECTION - CẬP NHẬT
     private var networkCongestionDetector: NetworkCongestionDetector?
     private var isActiveBrowsing = false
+    private var realNetworkMonitor: RealNetworkMonitor?
     
-    // 🎯 CẬP NHẬT NGUYỠNG TILT MỚI
+    // Ngưỡng
     private let drivingSpeedThreshold: Double = 10.0
-    private let viewingPhoneThreshold: Double = 80.0    // 🆕 <80% = ĐANG XEM
-    private let intermediateThreshold: Double = 90.0     // 🆕 80-90% = TRUNG GIAN
+    private let viewingPhoneThreshold: Double = 80.0
+    private let intermediateThreshold: Double = 90.0
     private let dangerAlertCooldown: TimeInterval = 5.0
 
     // Biến theo dõi độ ổn định trục Z
@@ -40,6 +42,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         super.init()
         setupNetworkMonitoring()
         setupNetworkCongestionDetection()
+        setupRealNetworkMonitoring() // 🆚 THÊM REAL NETWORK MONITORING
     }
     
     // MARK: - FlutterStreamHandler Methods
@@ -63,6 +66,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         setupTiltMonitoring()
         setupLockUnlockObservers()
         networkCongestionDetector?.startMonitoring()
+        realNetworkMonitor?.startMonitoring() // 🆚 BẮT ĐẦU REAL MONITORING
         
         print("Unlock Monitor: Đã đăng ký và bắt đầu theo dõi.")
     }
@@ -72,30 +76,60 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         locationManager?.stopUpdatingLocation()
         networkMonitor?.cancel()
         networkCongestionDetector?.stopMonitoring()
+        realNetworkMonitor?.stopMonitoring() // 🆚 DỪNG REAL MONITORING
         NotificationCenter.default.removeObserver(self)
     }
     
-    // 🎯 NETWORK CONGESTION DETECTION - ĐƠN GIẢN HÓA
+    // 🎯 REAL NETWORK MONITORING - PHÁT HIỆN THỰC TẾ
+    private func setupRealNetworkMonitoring() {
+        realNetworkMonitor = RealNetworkMonitor()
+        realNetworkMonitor?.onNetworkActivityDetected = { [weak self] isActive, activityType in
+            guard let self = self else { return }
+            
+            let wasBrowsing = self.isActiveBrowsing
+            self.isActiveBrowsing = isActive
+            
+            // 🎯 CHỈ GỬI SỰ KIỆN KHI CÓ THAY ĐỔI
+            if wasBrowsing != isActive {
+                let analysisTime = Date()
+                let analysisData: [String: Any] = [
+                    "type": "REAL_NETWORK_ANALYSIS",
+                    "message": isActive ? "Đang có hoạt động web thực tế (\(activityType))" : "Không có hoạt động web",
+                    "isActiveBrowsing": isActive,
+                    "activityType": activityType,
+                    "timestamp": Int(analysisTime.timeIntervalSince1970 * 1000)
+                ]
+                
+                self.sendEventToFlutter(analysisData)
+                print("🌐 Real Network Detection: \(isActive ? "ACTIVE - \(activityType)" : "INACTIVE")")
+            }
+        }
+    }
+    
+    // 🎯 NETWORK CONGESTION DETECTION - CẬP NHẬT
     private func setupNetworkCongestionDetection() {
         networkCongestionDetector = NetworkCongestionDetector()
         networkCongestionDetector?.onNetworkStatusUpdate = { [weak self] isBrowsing in
             guard let self = self else { return }
             
-            let wasBrowsing = self.isActiveBrowsing
-            self.isActiveBrowsing = isBrowsing
-            
-            // 🎯 CHỈ gửi sự kiện khi có thay đổi trạng thái
-            if wasBrowsing != isBrowsing {
-                let analysisTime = Date()
-                let analysisData: [String: Any] = [
-                    "type": "NETWORK_ANALYSIS",
-                    "message": isBrowsing ? "Đang có hoạt động lướt web" : "Không có hoạt động web",
-                    "isActiveBrowsing": isBrowsing, // 🎯 CHỈ GIỮ LẠI 1 TRƯỜNG
-                    "timestamp": Int(analysisTime.timeIntervalSince1970 * 1000)
-                ]
+            // 🎯 KẾT HỢP VỚI REAL NETWORK MONITORING
+            // Nếu real monitor phát hiện activity, ưu tiên real monitor
+            if !self.isActiveBrowsing {
+                let wasBrowsing = self.isActiveBrowsing
+                self.isActiveBrowsing = isBrowsing
                 
-                self.sendEventToFlutter(analysisData)
-                print("📊 Network Analysis: Browsing: \(isBrowsing)")
+                if wasBrowsing != isBrowsing {
+                    let analysisTime = Date()
+                    let analysisData: [String: Any] = [
+                        "type": "NETWORK_ANALYSIS",
+                        "message": isBrowsing ? "Đang có hoạt động lướt web" : "Không có hoạt động web",
+                        "isActiveBrowsing": isBrowsing,
+                        "timestamp": Int(analysisTime.timeIntervalSince1970 * 1000)
+                    ]
+                    
+                    self.sendEventToFlutter(analysisData)
+                    print("📊 Network Analysis: Browsing: \(isBrowsing)")
+                }
             }
         }
     }
@@ -211,7 +245,6 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         return min(max(tiltPercent, 0.0), 100.0)
     }
     
-    // 🎯 CẬP NHẬT: Hàm xác định trạng thái tilt theo ngưỡng mới
     private func getTiltStatus(_ tiltPercent: Double) -> String {
         if tiltPercent <= viewingPhoneThreshold {
             return "📱 ĐANG XEM"
@@ -227,11 +260,11 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         return Date().timeIntervalSince(lastAlert) >= dangerAlertCooldown
     }
     
-    // 🎯 CẬP NHẬT: Điều kiện cảnh báo với tilt ngưỡng mới
+    // 🎯 CẬP NHẬT: Điều kiện cảnh báo với network detection thực tế
     private func handleTiltDetection(zValue: Double) {
         let tiltPercent = convertTiltToPercent(zValue)
         let tiltStatus = getTiltStatus(tiltPercent)
-        let isViewingPhone = tiltPercent <= viewingPhoneThreshold // 🆕 <80%
+        let isViewingPhone = tiltPercent <= viewingPhoneThreshold
         let isZStable = zStability < 1.5
         
         // 🎯 ĐIỀU KIỆN CHÍNH XÁC: Dùng network detection thực tế
@@ -239,7 +272,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
                                      isDriving && 
                                      isViewingPhone && 
                                      isZStable &&
-                                     isActiveBrowsing && // 🎯 Phát hiện lướt web thực tế
+                                     isActiveBrowsing && // 🎯 Phát hiện web thực tế
                                      canSendDangerAlert()
         
         if shouldTriggerDangerAlert {
@@ -253,7 +286,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
                 "tiltPercent": tiltPercent,
                 "speed": currentSpeed,
                 "isNetworkActive": isNetworkActive,
-                "isActiveBrowsing": isActiveBrowsing, // 🎯 CHỈ GIỮ LẠI
+                "isActiveBrowsing": isActiveBrowsing,
                 "zStability": zStability,
                 "timestamp": Int(dangerTime.timeIntervalSince1970 * 1000)
             ]
@@ -276,7 +309,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
             "tiltPercent": tiltPercent,
             "speed": currentSpeed,
             "isNetworkActive": isNetworkActive,
-            "isActiveBrowsing": isActiveBrowsing, // 🎯 CHỈ GIỮ LẠI
+            "isActiveBrowsing": isActiveBrowsing,
             "zStability": zStability,
             "timestamp": Int(tiltTime.timeIntervalSince1970 * 1000)
         ]
@@ -465,7 +498,166 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
     }
 }
 
-// 🎯 NETWORK CONGESTION DETECTOR CLASS - ĐƠN GIẢN HÓA
+// 🎯 REAL NETWORK MONITOR - PHÁT HIỆN THỰC TẾ
+class RealNetworkMonitor {
+    private var timer: Timer?
+    private var lastNetworkStats: NetworkInterfaceStats?
+    private var activitySamples: [Bool] = []
+    private let sampleSize = 5
+    
+    var onNetworkActivityDetected: ((Bool, String) -> Void)?
+    
+    func startMonitoring() {
+        stopMonitoring()
+        
+        // 🎯 KIỂM TRA MỖI 3 GIÂY
+        timer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+            self?.checkRealNetworkActivity()
+        }
+        
+        // 🎯 CHO PHÉP TIMER CHẠY TRONG BACKGROUND
+        if let timer = timer {
+            RunLoop.current.add(timer, forMode: .common)
+        }
+        
+        print("🌐 Real Network Monitor started")
+    }
+    
+    func stopMonitoring() {
+        timer?.invalidate()
+        timer = nil
+    }
+    
+    private func checkRealNetworkActivity() {
+        let currentStats = getCurrentNetworkStats()
+        let isActive = detectRealNetworkActivity(currentStats: currentStats)
+        let activityType = determineActivityType(currentStats: currentStats)
+        
+        // 🎯 LƯU MẪU ĐỂ TRÁNH FALSE POSITIVE
+        activitySamples.append(isActive)
+        if activitySamples.count > sampleSize {
+            activitySamples.removeFirst()
+        }
+        
+        // 🎯 CHỈ BÁO CÁO NẾU CÓ NHIỀU MẪU ACTIVITY
+        let confirmedActive = activitySamples.filter { $0 }.count >= 3
+        
+        DispatchQueue.main.async {
+            self.onNetworkActivityDetected?(confirmedActive, activityType)
+        }
+        
+        lastNetworkStats = currentStats
+    }
+    
+    private func getCurrentNetworkStats() -> NetworkInterfaceStats {
+        var stats = NetworkInterfaceStats()
+        
+        // 🎯 METHOD 1: NETWORK INTERFACE STATISTICS
+        if let interfaceStats = getNetworkInterfaceStatistics() {
+            stats.bytesReceived = interfaceStats.bytesReceived
+            stats.bytesSent = interfaceStats.bytesSent
+            stats.packetsReceived = interfaceStats.packetsReceived
+            stats.hasActiveInterface = true
+        }
+        
+        // 🎯 METHOD 2: URLSESSION ACTIVE TASKS
+        stats.activeConnections = getActiveURLSessionTasks()
+        
+        // 🎯 METHOD 3: SYSTEM NETWORK INDICATORS
+        stats.isNetworkIndicatorVisible = isNetworkActivityIndicatorVisible()
+        
+        return stats
+    }
+    
+    private func detectRealNetworkActivity(currentStats: NetworkInterfaceStats) -> Bool {
+        // 🎯 ĐIỀU KIỆN 1: CÓ DATA TRAFFIC ĐÁNG KỂ
+        let hasSignificantTraffic = currentStats.bytesReceived > 5000 || currentStats.bytesSent > 2000
+        
+        // 🎯 ĐIỀU KIỆN 2: CÓ ACTIVE NETWORK CONNECTIONS
+        let hasActiveConnections = currentStats.activeConnections > 0
+        
+        // 🎯 ĐIỀU KIỆN 3: SO SÁNH VỚI LẦN TRƯỚC - CÓ TRAFFIC MỚI
+        var hasNewTraffic = false
+        if let lastStats = lastNetworkStats {
+            hasNewTraffic = (currentStats.bytesReceived - lastStats.bytesReceived) > 1000 ||
+                           (currentStats.bytesSent - lastStats.bytesSent) > 500
+        }
+        
+        // 🎯 ĐIỀU KIỆN 4: NETWORK ACTIVITY INDICATOR
+        let hasSystemIndicator = currentStats.isNetworkIndicatorVisible
+        
+        // 🎯 CHỈ CẦN 1 TRONG 4 ĐIỀU KIỆN
+        return hasSignificantTraffic || hasActiveConnections || hasNewTraffic || hasSystemIndicator
+    }
+    
+    private func determineActivityType(currentStats: NetworkInterfaceStats) -> String {
+        if currentStats.bytesReceived > currentStats.bytesSent * 2 {
+            return "Đang tải dữ liệu (xem web, video)"
+        } else if currentStats.bytesSent > currentStats.bytesReceived {
+            return "Đang gửi dữ liệu (upload, chat)"
+        } else if currentStats.activeConnections > 2 {
+            return "Nhiều kết nối (lướt web, app)"
+        } else {
+            return "Hoạt động mạng"
+        }
+    }
+    
+    // 🎯 LẤY THỐNG KÊ NETWORK INTERFACE
+    private func getNetworkInterfaceStatistics() -> (bytesReceived: Int, bytesSent: Int, packetsReceived: Int)? {
+        var ifaddrs: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddrs) == 0 else { return nil }
+        
+        defer { freeifaddrs(ifaddrs) }
+        
+        var totalReceived: Int = 0
+        var totalSent: Int = 0
+        var totalPackets: Int = 0
+        
+        var pointer = ifaddrs
+        while pointer != nil {
+            defer { pointer = pointer?.pointee.ifa_next }
+            
+            guard let interface = pointer?.pointee else { continue }
+            let name = String(cString: interface.ifa_name)
+            
+            // 🎯 CHỈ XEM XÉT CÁC INTERFACE CHÍNH
+            if name.hasPrefix("en") || name.hasPrefix("pdp_ip") {
+                if let data = interface.ifa_data {
+                    let stats = data.withMemoryRebound(to: if_data.self, capacity: 1) { $0.pointee }
+                    totalReceived += Int(stats.ifi_ibytes)
+                    totalSent += Int(stats.ifi_obytes)
+                    totalPackets += Int(stats.ifi_ipackets)
+                }
+            }
+        }
+        
+        return (totalReceived, totalSent, totalPackets)
+    }
+    
+    // 🎯 KIỂM TRA ACTIVE URLSESSION TASKS
+    private func getActiveURLSessionTasks() -> Int {
+        // 🎯 CÓ THỂ MỞ RỘNG ĐỂ KIỂM TRA CÁC ACTIVE NETWORK TASKS
+        return 0 // Tạm thời return 0
+    }
+    
+    // 🎯 KIỂM TRA NETWORK ACTIVITY INDICATOR
+    private func isNetworkActivityIndicatorVisible() -> Bool {
+        // 🎯 TRÊN iOS, CÓ THỂ KIỂM TRA NETWORK ACTIVITY INDICATOR
+        return false // Tạm thời return false
+    }
+}
+
+// 🎯 NETWORK STATS STRUCT
+struct NetworkInterfaceStats {
+    var bytesReceived: Int = 0
+    var bytesSent: Int = 0
+    var packetsReceived: Int = 0
+    var hasActiveInterface: Bool = false
+    var activeConnections: Int = 0
+    var isNetworkIndicatorVisible: Bool = false
+}
+
+// 🎯 NETWORK CONGESTION DETECTOR CLASS - CẬP NHẬT
 class NetworkCongestionDetector {
     private var pingTimer: Timer?
     private var latencySamples: [Double] = []
@@ -476,7 +668,6 @@ class NetworkCongestionDetector {
     private let sampleSize = 10
     private let pingTargets = ["8.8.8.8", "1.1.1.1", "208.67.222.222"]
     
-    // 🎯 CHỈ TRẢ VỀ isActiveBrowsing
     var onNetworkStatusUpdate: ((Bool) -> Void)?
     
     func startMonitoring() {
@@ -506,10 +697,11 @@ class NetworkCongestionDetector {
                 self.packetLossSamples.removeFirst()
             }
             
-            // 🎯 CHỈ XÁC ĐỊNH isActiveBrowsing
             let isBrowsing = self.detectWebBrowsingActivity()
             
-            self.onNetworkStatusUpdate?(isBrowsing)
+            DispatchQueue.main.async {
+                self.onNetworkStatusUpdate?(isBrowsing)
+            }
         }
     }
     
@@ -544,14 +736,16 @@ class NetworkCongestionDetector {
         lastRequestTime = Date()
     }
     
-    // 🎯 CHỈ PHÁT HIỆN WEB BROWSING - DỰA TRÊN 3 CHỈ SỐ THỰC TẾ
     private func detectWebBrowsingActivity() -> Bool {
         let requestRate = calculateRequestRate()
         let hasBurstPattern = detectBurstPattern()
         let hasHighLatency = detectHighLatency()
         
-        // 🎯 Web browsing: nhiều request + burst pattern + độ trễ cao
-        return requestRate > 3.0 && hasBurstPattern && hasHighLatency
+        // 🎯 THÊM ĐIỀU KIỆN PHÁT HIỆN HOẠT ĐỘNG LIÊN TỤC
+        let hasContinuousActivity = detectContinuousNetworkActivity()
+        
+        // 🎯 HOẶC có burst pattern HOẶC có continuous activity
+        return (requestRate > 2.0 && hasBurstPattern) || hasContinuousActivity
     }
     
     private func calculateRequestRate() -> Double {
@@ -575,6 +769,15 @@ class NetworkCongestionDetector {
     private func detectHighLatency() -> Bool {
         guard !latencySamples.isEmpty else { return false }
         let avgLatency = latencySamples.reduce(0, +) / Double(latencySamples.count)
-        return avgLatency > 100.0 // 🎯 Độ trễ > 100ms
+        return avgLatency > 100.0
+    }
+    
+    private func detectContinuousNetworkActivity() -> Bool {
+        // 🎯 PHÁT HIỆN HOẠT ĐỘNG MẠNG KÉO DÀI
+        guard let lastRequest = lastRequestTime else { return false }
+        let timeSinceLastRequest = Date().timeIntervalSince(lastRequest)
+        
+        // 🎯 NẾU CÓ REQUEST TRONG 15 GIÂY VÀ TỔNG SỐ REQUEST CAO
+        return timeSinceLastRequest < 15.0 && requestCount > 5
     }
 }

@@ -23,8 +23,9 @@ class MonitorEvent {
   final double? zStability;
   final DateTime timestamp;
   
-  // 🆕 CHỈ GIỮ LẠI 1 TRƯỜNG CHO NETWORK DETECTION
+  // 🎯 CÁC TRƯỜNG CHO NETWORK DETECTION
   final bool? isActiveBrowsing;
+  final String? activityType; // 🆚 THÊM TRƯỜNG MỚI CHO REAL NETWORK DETECTION
 
   MonitorEvent({
     required this.type,
@@ -37,7 +38,8 @@ class MonitorEvent {
     this.isNetworkActive,
     this.zStability,
     required this.timestamp,
-    this.isActiveBrowsing, // 🎯 CHỈ GIỮ LẠI TRẠNG THÁI WEB BROWSING
+    this.isActiveBrowsing,
+    this.activityType, // 🆚 THÊM TRƯỜNG MỚI
   });
 
   factory MonitorEvent.fromJson(Map<String, dynamic> json) {
@@ -52,7 +54,8 @@ class MonitorEvent {
       isNetworkActive: json['isNetworkActive'] as bool?,
       zStability: json['zStability'] as double?,
       timestamp: DateTime.fromMillisecondsSinceEpoch(json['timestamp'] as int),
-      isActiveBrowsing: json['isActiveBrowsing'] as bool?, // 🎯 CHỈ GIỮ LẠI
+      isActiveBrowsing: json['isActiveBrowsing'] as bool?,
+      activityType: json['activityType'] as String?, // 🆚 THÊM TRƯỜNG MỚI
     );
   }
 }
@@ -92,6 +95,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
   bool _isDriving = false;
   bool _isNetworkActive = false;
   bool _isActiveBrowsing = false;
+  String _activityType = ""; // 🆚 THÊM BIẾN MỚI CHO ACTIVITY TYPE
 
   // 🎯 Lưu trữ lịch sử tilt để tính trung bình 3s
   final List<double> _tiltHistory = [];
@@ -131,7 +135,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
     _currentTiltColor = _getTiltColor(_averageTiltPercent);
   }
 
-  // 🎯 CẬP NHẬT: Hàm xác định trạng thái tilt theo ngưỡng mới (80%-90%)
+  // 🎯 Hàm xác định trạng thái tilt theo ngưỡng mới (80%-90%)
   String _getTiltStatus(double tiltPercent) {
     if (tiltPercent <= 80.0) {
       return "📱 ĐANG XEM";
@@ -142,7 +146,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
     }
   }
 
-  // 🎯 CẬP NHẬT: Hàm xác định màu sắc theo trạng thái tilt mới
+  // 🎯 Hàm xác định màu sắc theo trạng thái tilt mới
   Color _getTiltColor(double tiltPercent) {
     if (tiltPercent <= 80.0) {
       return Colors.red.shade700;
@@ -178,11 +182,18 @@ class _MonitorScreenState extends State<MonitorScreen> {
           _isNetworkActive = monitorEvent.isNetworkActive ?? false;
           _historyEvents.insert(0, monitorEvent);
         } 
-        // 🎯 XỬ LÝ SỰ KIỆN NETWORK ANALYSIS MỚI (chỉ giữ isActiveBrowsing)
+        // 🎯 XỬ LÝ SỰ KIỆN NETWORK ANALYSIS
         else if (monitorEvent.type == 'NETWORK_ANALYSIS') {
           _isActiveBrowsing = monitorEvent.isActiveBrowsing ?? false;
           _historyEvents.insert(0, monitorEvent);
-        } 
+        }
+        // 🆚 XỬ LÝ SỰ KIỆN REAL NETWORK ANALYSIS MỚI
+        else if (monitorEvent.type == 'REAL_NETWORK_ANALYSIS') {
+          _isActiveBrowsing = monitorEvent.isActiveBrowsing ?? false;
+          _activityType = monitorEvent.activityType ?? "";
+          _historyEvents.insert(0, monitorEvent);
+          print("🌐 Real Network Event: ${monitorEvent.message}");
+        }
         else if (monitorEvent.type == 'DRIVING_STATUS' || monitorEvent.type == 'LOCATION_UPDATE') {
           _currentSpeed = monitorEvent.speed ?? 0.0;
           _isDriving = monitorEvent.isDriving ?? false;
@@ -255,7 +266,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
             ),
             if (_latestDangerEvent!.tiltPercent != null)
               Text(
-                'Tilt: ${_latestDangerEvent!.tiltPercent!.toStringAsFixed(1)}% | Web: ${_isActiveBrowsing ? "Đang lướt" : "Không lướt"}',
+                'Tilt: ${_latestDangerEvent!.tiltPercent!.toStringAsFixed(1)}% | Web: ${_isActiveBrowsing ? "Đang lướt" : "Không lướt"}${_activityType.isNotEmpty ? " • $_activityType" : ""}',
                 style: const TextStyle(color: Colors.white70, fontSize: 12),
               ),
           ],
@@ -392,23 +403,64 @@ class _MonitorScreenState extends State<MonitorScreen> {
               style: const TextStyle(fontSize: 14, color: Colors.white70),
             ),
             
-            // 🎯 HIỂN THỊ THÔNG TIN MẠNG ĐƠN GIẢN
+            // 🎯 HIỂN THỊ THÔNG TIN MẠNG CHI TIẾT
             const SizedBox(height: 12),
             const Divider(color: Colors.white10),
             const Text(
-              '📊 Phân Tích Mạng:',
+              '📊 Phân Tích Mạng Thực Tế:',
               style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
             ),
             const SizedBox(height: 8),
+            
+            // 🆚 HIỂN THỊ ACTIVITY TYPE NẾU CÓ
+            if (_activityType.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8.0),
+                child: Text(
+                  'Loại hoạt động: $_activityType',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.blue.shade300,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ),
+            
             Row(
               children: [
-                _buildNetworkInfoItem('Mạng:', 
-                    _isNetworkActive ? "📶 Đang kết nối" : "📵 Mất kết nối",
-                    _isNetworkActive ? Colors.green.shade400 : Colors.red.shade400),
-                const SizedBox(width: 20),
-                _buildNetworkInfoItem('Web:', 
-                    _isActiveBrowsing ? "🌐 Đang lướt web" : "💤 Không lướt web",
-                    _isActiveBrowsing ? Colors.blue.shade400 : Colors.grey.shade400),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildNetworkInfoItem('Mạng:', 
+                          _isNetworkActive ? "📶 Đang kết nối" : "📵 Mất kết nối",
+                          _isNetworkActive ? Colors.green.shade400 : Colors.red.shade400),
+                      _buildNetworkInfoItem('Web:', 
+                          _isActiveBrowsing ? "🌐 Đang lướt web" : "💤 Không lướt web",
+                          _isActiveBrowsing ? Colors.blue.shade400 : Colors.grey.shade400),
+                    ],
+                  ),
+                ),
+                // 🎯 HIỂN THỊ TRẠNG THÁI REAL-TIME DETECTION
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: _isActiveBrowsing ? Colors.blue.withOpacity(0.2) : Colors.green.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: _isActiveBrowsing ? Colors.blue : Colors.green,
+                      width: 1,
+                    ),
+                  ),
+                  child: Text(
+                    _isActiveBrowsing ? 'PHÁT HIỆN' : 'AN TOÀN',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: _isActiveBrowsing ? Colors.blue : Colors.green,
+                    ),
+                  ),
+                ),
               ],
             ),
             
@@ -427,19 +479,23 @@ class _MonitorScreenState extends State<MonitorScreen> {
   }
 
   Widget _buildNetworkInfoItem(String label, String value, Color color) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: const TextStyle(fontSize: 14, color: Colors.white70),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          value,
-          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: color),
-        ),
-      ],
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8.0),
+      child: Row(
+        children: [
+          Text(
+            label,
+            style: const TextStyle(fontSize: 14, color: Colors.white70),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              value,
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: color),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -591,11 +647,18 @@ class _MonitorScreenState extends State<MonitorScreen> {
         subtitle += '\nTrạng thái mạng';
         break;
 
-      // 🎯 CASE MỚI: Network Analysis (đơn giản hóa)
+      // 🎯 CASE: Network Analysis
       case 'NETWORK_ANALYSIS':
         eventColor = event.isActiveBrowsing == true ? Colors.blue.shade400 : Colors.grey.shade400;
         icon = event.isActiveBrowsing == true ? Icons.network_check : Icons.network_wifi;
         subtitle += '\nTrạng thái: ${event.isActiveBrowsing! ? "Đang lướt web" : "Không lướt web"}';
+        break;
+
+      // 🆚 CASE MỚI: Real Network Analysis
+      case 'REAL_NETWORK_ANALYSIS':
+        eventColor = event.isActiveBrowsing == true ? Colors.purple.shade400 : Colors.grey.shade400;
+        icon = event.isActiveBrowsing == true ? Icons.network_ping : Icons.network_wifi;
+        subtitle += '\nPhát hiện thực tế: ${event.activityType ?? "Không xác định"}';
         break;
       
       case 'LOCATION_UPDATE':
@@ -651,7 +714,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(vertical: 4.0),
                 child: Text(
-                  'Kết nối: $_connectionStatus | Tilt: ${_averageTiltPercent.toStringAsFixed(1)}% | Tốc độ: ${_currentSpeed.toStringAsFixed(1)} km/h | Web: ${_isActiveBrowsing ? "Đang lướt" : "Không lướt"}',
+                  'Kết nối: $_connectionStatus | Tilt: ${_averageTiltPercent.toStringAsFixed(1)}% | Tốc độ: ${_currentSpeed.toStringAsFixed(1)} km/h | Web: ${_isActiveBrowsing ? "Đang lướt" : "Không lướt"}${_activityType.isNotEmpty ? " • $_activityType" : ""}',
                   textAlign: TextAlign.center,
                   style: const TextStyle(fontSize: 12, color: Colors.white70),
                 ),
