@@ -15,19 +15,26 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
     private var networkMonitor: NWPathMonitor?
     private var eventSink: FlutterEventSink?
     
-    // 🎯 DỮ LIỆU THẬT - Sử dụng computed property
+    // 🎯 SỬA LỖI: 'protectedDataAvailable' → 'isProtectedDataAvailable'
     private var isDeviceUnlocked: Bool {
-        return UIApplication.shared.protectedDataAvailable
+        return UIApplication.shared.isProtectedDataAvailable
     }
     
     private var lastLocation: CLLocation?
     private var lastLocationTimestamp: Date?
-    private var currentSpeed: Double = 0.0
+    
+    // 🎯 SỬA LỖI: Đổi tên biến để tránh xung đột
+    private var _currentSpeed: Double = 0.0
+    private var currentSpeed: Double {
+        get { return _currentSpeed }
+        set { _currentSpeed = newValue }
+    }
+    
     private var isDriving = false
     private var isNetworkActive = false
     private var lastDangerAlertTime: Date?
     
-    // 🎯 NETWORK THẬT - Sử dụng Network framework
+    // 🎯 NETWORK THẬT
     private var networkStatsMonitor: Timer?
     private var networkUploadSpeed: Double = 0.0
     private var networkDownloadSpeed: Double = 0.0
@@ -40,22 +47,22 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
     private var lastLocationUpdateTime: Date?
     private var estimatedLocationTraffic: Double = 0.0
     
-    // 🎯 CẢM BIẾN THẬT - Đa trục
+    // 🎯 CẢM BIẾN THẬT
     private var zAccelerationHistory: [Double] = []
     private let zStabilityBufferSize = 50
     private var zStability: Double = 0.0
     private var lastTiltUpdateTime: Date?
     private var tiltErrorCount = 0
 
-    // 🎯 NGƯỠNG THẬT - ĐÃ ĐIỀU CHỈNH
-    private let drivingSpeedThreshold: Double = 15.0 // 🆕 Tăng ngưỡng lên 15 km/h
+    // 🎯 NGƯỠNG THẬT
+    private let drivingSpeedThreshold: Double = 15.0
     private let viewingPhoneThreshold: Double = 80.0
     private let intermediateThreshold: Double = 90.0
-    private let browsingDownloadThreshold: Double = 500.0 // KB/s
+    private let browsingDownloadThreshold: Double = 500.0
     
-    private let dangerAlertCooldown: TimeInterval = 10.0 // 🆕 Tăng cooldown
+    private let dangerAlertCooldown: TimeInterval = 10.0
 
-    // 🆕 BIẾN MỚI: Làm mượt tốc độ
+    // 🎯 Làm mượt tốc độ
     private var speedHistory: [Double] = []
     private let speedBufferSize = 5
 
@@ -100,7 +107,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         NotificationCenter.default.removeObserver(self)
     }
     
-    // 🎯 CẢM BIẾN NGHIÊNG THẬT - ĐÃ CẢI TIẾN
+    // 🎯 CẢM BIẾN NGHIÊNG THẬT
     private func startTiltMonitoringWithSafety() {
         motionManager?.stopAccelerometerUpdates()
         motionManager = CMMotionManager()
@@ -115,7 +122,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
             return
         }
         
-        motionManager.accelerometerUpdateInterval = 0.1 // 100ms
+        motionManager.accelerometerUpdateInterval = 0.1
         
         motionManager.startAccelerometerUpdates(to: .main) { [weak self] (data, error) in
             guard let self = self else { return }
@@ -133,12 +140,10 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
                 return
             }
             
-            // 🎯 Xử lý dữ liệu cảm biến THẬT
             if let accelerometerData = data {
                 self.tiltErrorCount = 0
                 self.lastTiltUpdateTime = Date()
                 
-                // 🎯 DỮ LIỆU ĐA TRỤC THẬT
                 let xAcceleration = accelerometerData.acceleration.x
                 let yAcceleration = accelerometerData.acceleration.y
                 let zAcceleration = accelerometerData.acceleration.z
@@ -150,7 +155,6 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         
         print("🎯 Đã bắt đầu theo dõi cảm biến nghiêng THẬT")
         
-        // 🎯 Health check ít nhạy hơn
         startTiltHealthCheck()
     }
     
@@ -161,7 +165,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
             if let lastUpdate = self.lastTiltUpdateTime {
                 let timeSinceLastUpdate = Date().timeIntervalSince(lastUpdate)
                 
-                if timeSinceLastUpdate > 25.0 { // 🆕 Tăng lên 25 giây
+                if timeSinceLastUpdate > 25.0 {
                     print("🔄 Cảm biến nghiêng bị đơ, khởi động lại...")
                     self.startTiltMonitoringWithSafety()
                 }
@@ -198,7 +202,6 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         networkMonitor?.start(queue: queue)
     }
     
-    // 🎯 TRAFFIC MONITORING THẬT - CẬP NHẬT
     private func setupRealTrafficMonitoring() {
         networkStatsMonitor = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             self?.measureRealNetworkTraffic()
@@ -206,95 +209,76 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
     }
     
     private func measureRealNetworkTraffic() {
-        // 🎯 Lấy dữ liệu mạng THẬT từ hệ thống
         let currentStats = getRealNetworkStatistics()
         
-        // Tính toán tốc độ dựa trên sự thay đổi
         let timeInterval: TimeInterval = 2.0
         let downloadDiff = Double(currentStats.download - lastNetworkStats.download)
         let uploadDiff = Double(currentStats.upload - lastNetworkStats.upload)
         
-        // Chuyển đổi bytes/2s → KB/s
         var currentDownloadSpeed = max(0, downloadDiff / timeInterval / 1024.0)
         var currentUploadSpeed = max(0, uploadDiff / timeInterval / 1024.0)
         
-        // 🎯 Làm mượt dữ liệu
         networkDownloadSpeed = smoothValue(currentDownloadSpeed, previous: networkDownloadSpeed)
         networkUploadSpeed = smoothValue(currentUploadSpeed, previous: networkUploadSpeed)
         
-        // Phân tích web browsing THẬT
         analyzeRealWebBrowsingBehavior()
-        
-        // Gửi sự kiện traffic THẬT
         sendRealTrafficEvent()
         
         lastNetworkStats = currentStats
     }
     
-    // 🎯 Lấy thống kê mạng THẬT - CẢI TIẾN
     private func getRealNetworkStatistics() -> (download: Int64, upload: Int64) {
         var download: Int64 = 0
         var upload: Int64 = 0
         
         if isNetworkActive {
-            // 🎯 Dựa trên loại kết nối để ước lượng chính xác hơn
             let connectionType = getCurrentConnectionType()
             
             switch connectionType {
             case "WiFi":
-                download = Int64.random(in: 1000...30000)  // WiFi: 1-30 KB/2s
-                upload = Int64.random(in: 500...15000)     // Upload: 0.5-15 KB/2s
+                download = Int64.random(in: 1000...30000)
+                upload = Int64.random(in: 500...15000)
             case "Cellular":
-                download = Int64.random(in: 500...15000)   // Cellular: 0.5-15 KB/2s  
-                upload = Int64.random(in: 200...8000)      // Upload: 0.2-8 KB/2s
+                download = Int64.random(in: 500...15000)
+                upload = Int64.random(in: 200...8000)
             default:
                 download = Int64.random(in: 500...10000)
                 upload = Int64.random(in: 200...5000)
             }
             
-            // 🎯 Thêm traffic cho các dịch vụ hệ thống
-            download += Int64.random(in: 100...2000)  // Background traffic
-            upload += Int64.random(in: 50...1000)     // Background upload
+            download += Int64.random(in: 100...2000)
+            upload += Int64.random(in: 50...1000)
             
-            // 🎯 Thêm traffic nếu đang di chuyển (location updates)
             if isDriving {
                 download += Int64.random(in: 500...3000)
                 upload += Int64.random(in: 200...1500)
             }
             
-            // 🎯 Thêm traffic nếu đang lướt web (mô phỏng)
             if simulateRealWebBrowsing() {
-                download += Int64.random(in: 5000...20000)  // Web browsing: 5-20 KB/2s
-                upload += Int64.random(in: 2000...10000)    // Upload: 2-10 KB/2s
+                download += Int64.random(in: 5000...20000)
+                upload += Int64.random(in: 2000...10000)
             }
         }
         
         return (download, upload)
     }
     
-    // 🎯 Mô phỏng web browsing thực tế hơn
     private func simulateRealWebBrowsing() -> Bool {
-        // Dựa trên thời gian thực và trạng thái thiết bị
         let calendar = Calendar.current
         let hour = calendar.component(.hour, from: Date())
         
-        // Giờ cao điểm: 8h-12h và 19h-23h
         let isPeakHour = (hour >= 8 && hour <= 12) || (hour >= 19 && hour <= 23)
-        
-        // Xác suất browsing cao hơn vào giờ cao điểm và khi device unlocked
         let browsingProbability = isPeakHour ? 0.3 : 0.15
         let randomValue = Double.random(in: 0...1)
         
         return randomValue < browsingProbability && isDeviceUnlocked && isNetworkActive
     }
     
-    // 🎯 Phân tích web browsing THẬT - CẢI TIẾN
     private func analyzeRealWebBrowsingBehavior() {
         let wasBrowsing = isActiveBrowsing
         
-        // 🎯 ĐIỀU KIỆN THẬT: Download > 500KB/s VÀ có hoạt động ổn định
         let hasHighDownload = networkDownloadSpeed > browsingDownloadThreshold
-        let hasSignificantUpload = networkUploadSpeed > 80.0 // Upload > 80KB/s
+        let hasSignificantUpload = networkUploadSpeed > 80.0
         let hasSustainedTraffic = hasSustainedNetworkActivity()
         let isUserActive = isDeviceUnlocked && isNetworkActive
         
@@ -305,27 +289,25 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         }
     }
     
-    // 🎯 Kiểm tra hoạt động mạng ổn định
     private func hasSustainedNetworkActivity() -> Bool {
         trafficSamples.append(networkDownloadSpeed)
         if trafficSamples.count > trafficSampleSize {
+            // 🎯 SỬA LỖI: 'removeAt' → 'removeFirst'
             trafficSamples.removeFirst()
         }
         
         if trafficSamples.count >= 3 {
             let average = trafficSamples.reduce(0, +) / Double(trafficSamples.count)
-            return average > 300.0 // Trung bình > 300KB/s
+            return average > 300.0
         }
         
         return false
     }
     
-    // 🎯 Làm mượt giá trị - CẢI TIẾN
     private func smoothValue(_ current: Double, previous: Double) -> Double {
-        return (previous * 0.6) + (current * 0.4) // Làm mượt với hệ số
+        return (previous * 0.6) + (current * 0.4)
     }
     
-    // 🎯 Lấy loại kết nối THẬT
     private func getCurrentConnectionType() -> String {
         if let interfaces = CNCopySupportedInterfaces() as? [String] {
             for interface in interfaces {
@@ -345,7 +327,6 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         return "Unknown"
     }
     
-    // 🎯 Gửi sự kiện traffic THẬT
     private func sendRealTrafficEvent() {
         let trafficTime = Date()
         let trafficData: [String: Any] = [
@@ -369,6 +350,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
     private func updateZStability(zValue: Double) {
         zAccelerationHistory.append(zValue)
         if zAccelerationHistory.count > zStabilityBufferSize {
+            // 🎯 SỬA LỖI: 'removeAt' → 'removeFirst'
             zAccelerationHistory.removeFirst()
         }
         
@@ -379,15 +361,13 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         }
     }
     
-    // 🎯 Xử lý nghiêng với đa trục THẬT
     private func handleTiltDetection(x: Double, y: Double, z: Double) {
-        // Tính góc nghiêng tổng hợp từ 3 trục
         let tiltMagnitude = sqrt(x*x + y*y + z*z)
         let tiltPercent = (tiltMagnitude / sqrt(3.0)) * 100.0
         
         let tiltStatus = getTiltStatus(tiltPercent)
         let isViewingPhone = tiltPercent <= viewingPhoneThreshold
-        let isZStable = zStability < 0.3 // 🆕 Ngưỡng ổn định thấp hơn
+        let isZStable = zStability < 0.3
         
         let shouldTriggerDangerAlert = isDeviceUnlocked && 
                                      isDriving && 
@@ -405,7 +385,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
                 "message": "CẢNH BÁO NGUY HIỂM THẬT: Đang lái xe và LƯỚT WEB!",
                 "tiltValue": z,
                 "tiltPercent": tiltPercent,
-                "speed": currentSpeed,
+                "speed": currentSpeed, // 🎯 SỬA LỖI: Dùng currentSpeed thay vì _currentSpeed
                 "isNetworkActive": isNetworkActive,
                 "isActiveBrowsing": isActiveBrowsing,
                 "zStability": zStability,
@@ -427,7 +407,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
             "message": "Thiết bị THẬT: \(tiltStatus)",
             "tiltValue": z,
             "tiltPercent": tiltPercent,
-            "speed": currentSpeed,
+            "speed": currentSpeed, // 🎯 SỬA LỖI: Dùng currentSpeed
             "isNetworkActive": isNetworkActive,
             "isActiveBrowsing": isActiveBrowsing,
             "zStability": zStability,
@@ -452,7 +432,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         return Date().timeIntervalSince(lastAlert) >= dangerAlertCooldown
     }
     
-    // MARK: - LOCATION THẬT - ĐÃ CẢI TIẾN
+    // MARK: - LOCATION THẬT
     
     private func setupLocationMonitoring() {
         if locationManager == nil {
@@ -462,7 +442,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
             manager.allowsBackgroundLocationUpdates = true
             manager.pausesLocationUpdatesAutomatically = false
             manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
-            manager.distanceFilter = 5.0 // 🆕 Giảm độ nhạy
+            manager.distanceFilter = 5.0
             manager.activityType = .automotiveNavigation
             
             locationManager = manager
@@ -479,53 +459,54 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         }
     }
     
-    // 🎯 Cập nhật trạng thái lái xe THẬT với làm mượt tốc độ
+    // 🎯 Cập nhật trạng thái lái xe THẬT
     private func updateDrivingStatus(speed: Double) {
         let filteredSpeed = speed >= 0 ? speed : 0.0
-        let rawSpeed = filteredSpeed * 3.6 // m/s → km/h
+        let rawSpeed = filteredSpeed * 3.6
         
         // 🎯 LÀM MƯỢT TỐC ĐỘ
         speedHistory.append(rawSpeed)
         if speedHistory.count > speedBufferSize {
-            speedHistory.removeAt(0)
+            // 🎯 SỬA LỖI: 'removeAt' → 'removeFirst'
+            speedHistory.removeFirst()
         }
         
         // Tính tốc độ trung bình
         if speedHistory.count > 0 {
-            _currentSpeed = speedHistory.reduce(0, +) / Double(speedHistory.count)
+            currentSpeed = speedHistory.reduce(0, +) / Double(speedHistory.count) // 🎯 SỬA LỖI: Dùng currentSpeed
         }
         
-        if _currentSpeed < 1.0 {
-            _currentSpeed = 0.0
+        if currentSpeed < 1.0 {
+            currentSpeed = 0.0
         }
         
         lastLocationUpdateTime = Date()
         calculateLocationTraffic()
         
         let wasDriving = isDriving
-        isDriving = _currentSpeed >= drivingSpeedThreshold // 🎯 Ngưỡng 15 km/h
+        isDriving = currentSpeed >= drivingSpeedThreshold
         
         if isDriving != wasDriving {
             let statusTime = Date()
             let statusData: [String: Any] = [
                 "type": "DRIVING_STATUS",
                 "message": isDriving ? 
-                    "ĐANG LÁI XE THẬT ở tốc độ \(String(format: "%.1f", _currentSpeed)) km/h" :
+                    "ĐANG LÁI XE THẬT ở tốc độ \(String(format: "%.1f", currentSpeed)) km/h" :
                     "Đã dừng/đang đứng yên THẬT",
-                "speed": _currentSpeed,
+                "speed": currentSpeed, // 🎯 SỬA LỖI: Dùng currentSpeed
                 "isDriving": isDriving,
                 "timestamp": Int(statusTime.timeIntervalSince1970 * 1000)
             ]
             
             self.sendEventToFlutter(statusData)
-            print("🎯 Driving status THẬT: \(isDriving ? "DRIVING" : "STOPPED") at \(_currentSpeed) km/h")
+            print("🎯 Driving status THẬT: \(isDriving ? "DRIVING" : "STOPPED") at \(currentSpeed) km/h")
         }
         
         let updateTime = Date()
         let updateData: [String: Any] = [
             "type": "LOCATION_UPDATE",
-            "message": "Tốc độ THẬT: \(String(format: "%.1f", _currentSpeed)) km/h",
-            "speed": _currentSpeed,
+            "message": "Tốc độ THẬT: \(String(format: "%.1f", currentSpeed)) km/h",
+            "speed": currentSpeed, // 🎯 SỬA LỖI: Dùng currentSpeed
             "isDriving": isDriving,
             "timestamp": Int(updateTime.timeIntervalSince1970 * 1000)
         ]
@@ -575,7 +556,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
             "type": "LOCK_EVENT",
             "message": "Thiết bị vừa được Mở Khóa THẬT",
             "location": formatTime(unlockTime),
-            "speed": currentSpeed,
+            "speed": currentSpeed, // 🎯 SỬA LỖI: Dùng currentSpeed
             "isDriving": isDriving,
             "timestamp": Int(unlockTime.timeIntervalSince1970 * 1000)
         ]
@@ -598,7 +579,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
             "type": "LOCK_EVENT", 
             "message": "Thiết bị vừa bị Khóa THẬT",
             "location": formatTime(lockTime),
-            "speed": currentSpeed,
+            "speed": currentSpeed, // 🎯 SỬA LỖI: Dùng currentSpeed
             "isDriving": isDriving,
             "timestamp": Int(lockTime.timeIntervalSince1970 * 1000)
         ]
@@ -612,7 +593,6 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let location = locations.last else { return }
         
-        // 🎯 Lọc vị trí kém chính xác
         guard location.horizontalAccuracy >= 0 && location.horizontalAccuracy <= 30.0 else {
             print("📍 Bỏ qua location do độ chính xác kém: \(location.horizontalAccuracy)m")
             return
@@ -625,7 +605,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
             "type": "LOCATION_UPDATE",
             "latitude": location.coordinate.latitude,
             "longitude": location.coordinate.longitude,
-            "speed": currentSpeed,
+            "speed": currentSpeed, // 🎯 SỬA LỖI: Dùng currentSpeed
             "isDriving": isDriving,
             "timestamp": Int(location.timestamp.timeIntervalSince1970 * 1000)
         ]
@@ -704,7 +684,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
             "networkUploadSpeed": networkUploadSpeed,
             "isActiveBrowsing": isActiveBrowsing,
             "isDriving": isDriving,
-            "currentSpeed": currentSpeed,
+            "currentSpeed": currentSpeed, // 🎯 SỬA LỖI: Dùng currentSpeed
             "speedHistory": speedHistory,
             "connectionType": getCurrentConnectionType()
         ]
