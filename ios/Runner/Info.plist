@@ -45,49 +45,20 @@
     <true/>
     <key>UIApplicationSupportsIndirectInputEvents</key>
     <true/>
-    
-    <!-- 🆕 THÊM CÁC QUYỀN MỚI -->
-    
-    <!-- 1. Quyền Location (ĐÃ CÓ - giữ nguyên) -->
     <key>NSLocationWhenInUseUsageDescription</key>
     <string>Ứng dụng cần vị trí để theo dõi trạng thái thiết bị.</string>
     <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
     <string>Cần vị trí nền để duy trì kết nối và theo dõi trạng thái màn hình.</string>
-    
     <!-- 2. Quyền Motion (Cảm biến nghiêng) -->
     <key>NSMotionUsageDescription</key>
     <string>Ứng dụng cần truy cập cảm biến để phát hiện góc nghiêng điện thoại và cảnh báo an toàn khi lái xe</string>
+    <!-- 5. Quyền Network (WiFi info) -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Ứng dụng cần truy cập thông tin mạng để theo dõi lưu lượng và tốc độ kết nối để cảnh báo lái xe không lướt mạng</string>
     
-    <!-- 3. Quyền Notifications -->
-    <key>UNUserNotificationCenter</key>
-    <true/>
-    
-    <!-- 4. Quyền Background Modes (Mở rộng) -->
     <key>UIBackgroundModes</key>
     <array>
         <string>location</string>
-        <string>processing</string>
-        <string>fetch</string>
-        <string>remote-notification</string>
-    </array>
-    
-    <!-- 5. Quyền Network (WiFi info) -->
-    <key>NSLocalNetworkUsageDescription</key>
-    <string>Ứng dụng cần truy cập thông tin mạng để theo dõi lưu lượng và tốc độ kết nối</string>
-    
-    <!-- 6. Quyền Cellular Data (iOS 12+) -->
-    <key>NSAppTransportSecurity</key>
-    <dict>
-        <key>NSAllowsArbitraryLoads</key>
-        <true/>
-    </dict>
-    
-    <!-- 7. Quyền Background Processing -->
-    <key>BGTaskSchedulerPermittedIdentifiers</key>
-    <array>
-        <string>$(PRODUCT_BUNDLE_IDENTIFIER).background-refresh</string>
-        <string>$(PRODUCT_BUNDLE_IDENTIFIER).location-update</string>
-        <string>$(PRODUCT_BUNDLE_IDENTIFIER).network-monitor</string>
     </array>
     
 </dict>

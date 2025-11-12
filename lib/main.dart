@@ -1,16 +1,16 @@
 // lib/main.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:network_info_plus/network_info_plus.dart';
-import 'package:internet_speed_test/internet_speed_test.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'package:flutter/foundation.dart';
 
 void main() {
   runApp(const MyApp());
 }
 
+// 🎯 CHỈ tạo EventChannel trên iOS để tránh lỗi đa nền tảng
 const EventChannel _eventChannel = EventChannel('com.example.app/monitor_events');
 
 class MonitorEvent {
@@ -108,15 +108,10 @@ class _MonitorScreenState extends State<MonitorScreen> {
   double _networkUploadSpeed = 0.0;
   double _networkDownloadSpeed = 0.0;
 
-  // 🆕 THÊM: Network info và speed test
-  final NetworkInfo _networkInfo = NetworkInfo();
-  final InternetSpeedTest _speedTest = InternetSpeedTest();
-  String _wifiName = "Unknown";
-  String _ipAddress = "Unknown";
-  bool _isTestingSpeed = false;
-  String _speedTestStatus = "";
-
+  // 🎯 BIẾN ĐA NỀN TẢNG
   bool _isUpdating = false;
+  bool _isIOS = false;
+  String _platformName = "Unknown";
 
   final List<double> _tiltHistory = [];
   static const int _tiltBufferSize = 30;
@@ -125,143 +120,151 @@ class _MonitorScreenState extends State<MonitorScreen> {
   String _currentTiltStatus = "Chờ dữ liệu...";
   Color _currentTiltColor = Colors.grey;
 
+  // 🎯 MÔ PHỎNG DỮ LIỆU CHO NON-IOS
+  Timer? _simulationTimer;
+  Random _random = Random();
+
   @override
   void initState() {
     super.initState();
+    _initializePlatform();
     _startListeningToEvents();
-    _initializeNetworkInfo();
-    _startPeriodicSpeedTest();
+    _startDataSimulation();
   }
 
-  // 🆕 HÀM MỚI: Khởi tạo thông tin mạng
-  void _initializeNetworkInfo() async {
-    try {
-      _wifiName = (await _networkInfo.getWifiName()) ?? "Unknown";
-      _ipAddress = (await _networkInfo.getWifiIP()) ?? "Unknown";
-      
-      final networkData: [String: Any] = [
-        "type": "NETWORK_INFO",
-        "message": "WiFi: $_wifiName | IP: $_ipAddress",
-        "wifiName": _wifiName,
-        "ipAddress": _ipAddress,
-        "timestamp": DateTime.now().millisecondsSinceEpoch
-      ];
-      
-      _sendEventToFlutter(networkData);
-    } catch (e) {
-      print("Lỗi lấy thông tin mạng: $e");
-    }
+  @override
+  void dispose() {
+    _simulationTimer?.cancel();
+    super.dispose();
   }
 
-  // 🆕 HÀM MỚI: Test tốc độ mạng định kỳ
-  void _startPeriodicSpeedTest() {
-    // Test tốc độ mỗi 30 giây
-    Timer.periodic(Duration(seconds: 30), (timer) {
-      if (_isNetworkActive && !_isTestingSpeed) {
-        _testInternetSpeed();
-      }
-    });
-  }
-
-  // 🆕 HÀM MỚI: Test tốc độ internet thực tế
-  void _testInternetSpeed() {
+  // 🎯 KHỞI TẠO NỀN TẢNG
+  void _initializePlatform() {
     setState(() {
-      _isTestingSpeed = true;
-      _speedTestStatus = "Đang test tốc độ...";
+      _isIOS = defaultTargetPlatform == TargetPlatform.iOS;
+      _platformName = _getPlatformName();
+      _connectionStatus = "Nền tảng: $_platformName";
     });
-
-    _speedTest.startDownloadTesting(
-      onDone: (double transferRate, SpeedUnit unit) {
-        setState(() {
-          _networkDownloadSpeed = _convertToKBps(transferRate, unit);
-          _isTestingSpeed = false;
-          _speedTestStatus = "Download: ${_networkDownloadSpeed.toStringAsFixed(1)} KB/s";
-        });
-        
-        _sendSpeedTestEvent();
-      },
-      onError: (String errorMessage, String speedTestError) {
-        print('Lỗi test download: $errorMessage');
-        setState(() {
-          _isTestingSpeed = false;
-          _speedTestStatus = "Lỗi test tốc độ";
-        });
-      },
-      onProgress: (double percent, double transferRate, SpeedUnit unit) {
-        final speed = _convertToKBps(transferRate, unit);
-        setState(() {
-          _networkDownloadSpeed = speed;
-        });
-      },
-      fileSize: 5000000, // 5MB
-    );
-
-    // Test upload sau khi download xong
-    Timer(Duration(seconds: 10), () {
-      if (_isNetworkActive) {
-        _speedTest.startUploadTesting(
-          onDone: (double transferRate, SpeedUnit unit) {
-            setState(() {
-              _networkUploadSpeed = _convertToKBps(transferRate, unit);
-              _speedTestStatus = "↑${_networkUploadSpeed.toStringAsFixed(1)} ↓${_networkDownloadSpeed.toStringAsFixed(1)} KB/s";
-            });
-            _sendSpeedTestEvent();
-          },
-          onError: (String errorMessage, String speedTestError) {
-            print('Lỗi test upload: $errorMessage');
-          },
-          onProgress: (double percent, double transferRate, SpeedUnit unit) {
-            final speed = _convertToKBps(transferRate, unit);
-            setState(() {
-              _networkUploadSpeed = speed;
-            });
-          },
-          fileSize: 3000000, // 3MB
-        );
-      }
-    });
+    print("🚀 Ứng dụng chạy trên: $_platformName");
   }
 
-  // 🆕 HÀM MỚI: Chuyển đổi đơn vị tốc độ sang KB/s
-  double _convertToKBps(double rate, SpeedUnit unit) {
-    switch (unit) {
-      case SpeedUnit.kbps:
-        return rate / 8.0; // kbps to KB/s
-      case SpeedUnit.mbps:
-        return rate * 125.0; // mbps to KB/s (1 mbps = 125 KB/s)
-      default:
-        return rate;
+  String _getPlatformName() {
+    if (kIsWeb) return "Web Browser";
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.iOS: return "iOS";
+      case TargetPlatform.android: return "Android";
+      case TargetPlatform.windows: return "Windows";
+      case TargetPlatform.macOS: return "macOS";
+      case TargetPlatform.linux: return "Linux";
+      default: return "Unknown";
     }
   }
 
-  // 🆕 HÀM MỚI: Gửi sự kiện tốc độ test
-  void _sendSpeedTestEvent() {
-    final trafficData = {
-      "type": "TRAFFIC_ANALYSIS",
-      "message": "Tốc độ mạng thực tế: ↑${_networkUploadSpeed.toStringAsFixed(1)} ↓${_networkDownloadSpeed.toStringAsFixed(1)} KB/s",
-      "isActiveBrowsing": _isActiveBrowsing,
-      "estimatedWebTraffic": 0.0,
-      "estimatedLocationTraffic": 0.0,
-      "networkUploadSpeed": _networkUploadSpeed,
-      "networkDownloadSpeed": _networkDownloadSpeed,
-      "timestamp": DateTime.now().millisecondsSinceEpoch
-    };
-    
-    _sendEventToFlutter(trafficData);
-  }
-
-  // 🆕 HÀM MỚI: Gửi sự kiện đến Flutter (cho network info)
-  void _sendEventToFlutter(Map<String, dynamic> data) {
-    // Giả lập gửi sự kiện - trong thực tế sẽ gửi qua MethodChannel
-    print("Network Event: $data");
-  }
-
+  // 🎯 LẮNG NGHE SỰ KIỆN (CHỈ iOS)
   void _startListeningToEvents() {
-    _eventChannel.receiveBroadcastStream().listen(
-      _onEvent,
-      onError: _onError,
-      onDone: _onDone,
+    if (_isIOS) {
+      _eventChannel.receiveBroadcastStream().listen(
+        _onEvent,
+        onError: _onError,
+        onDone: _onDone,
+      );
+    } else {
+      // Non-iOS: Dùng simulated data
+      _connectionStatus = "Đang chạy trên $_platformName (Simulated Data)";
+    }
+  }
+
+  // 🎯 MÔ PHỎNG DỮ LIỆU CHO NON-IOS
+  void _startDataSimulation() {
+    if (!_isIOS) {
+      _simulationTimer = Timer.periodic(Duration(seconds: 2), (timer) {
+        _generateSimulatedData();
+      });
+    }
+  }
+
+  void _generateSimulatedData() {
+    // 🎯 Mô phỏng dữ liệu tilt ngẫu nhiên
+    final simulatedTiltPercent = _random.nextDouble() * 100;
+    _updateTiltAverage(simulatedTiltPercent);
+    
+    // 🎯 Mô phỏng tốc độ di chuyển
+    final simulatedSpeed = _random.nextDouble() * 120;
+    
+    // 🎯 Mô phỏng trạng thái lái xe
+    final simulatedDriving = simulatedSpeed > 10;
+    
+    // 🎯 Mô phỏng network traffic
+    final simulatedDownloadSpeed = 50 + _random.nextDouble() * 500;
+    final simulatedUploadSpeed = 10 + _random.nextDouble() * 100;
+    
+    setState(() {
+      _currentSpeed = simulatedSpeed;
+      _isDriving = simulatedDriving;
+      _networkDownloadSpeed = simulatedDownloadSpeed;
+      _networkUploadSpeed = simulatedUploadSpeed;
+      _isNetworkActive = true;
+      
+      // 🎯 Mô phỏng web browsing (30% thời gian)
+      _isActiveBrowsing = _random.nextDouble() > 0.7;
+    });
+
+    // 🎯 Tạo sự kiện mô phỏng
+    final simulatedEvent = MonitorEvent(
+      type: 'TILT_EVENT',
+      message: 'Thiết bị: $_currentTiltStatus',
+      tiltValue: simulatedTiltPercent / 100,
+      tiltPercent: simulatedTiltPercent,
+      speed: simulatedSpeed,
+      isDriving: simulatedDriving,
+      isNetworkActive: true,
+      zStability: _random.nextDouble() * 0.5,
+      timestamp: DateTime.now(),
+      isActiveBrowsing: _isActiveBrowsing,
+      estimatedWebTraffic: _isActiveBrowsing ? 100 + _random.nextDouble() * 200 : 10 + _random.nextDouble() * 20,
+      estimatedLocationTraffic: 5 + _random.nextDouble() * 10,
+      networkUploadSpeed: simulatedUploadSpeed,
+      networkDownloadSpeed: simulatedDownloadSpeed,
     );
+
+    _latestTiltEvent = simulatedEvent;
+    
+    // 🎯 Thêm vào lịch sử mỗi 10 giây
+    if (DateTime.now().second % 10 == 0) {
+      _historyEvents.insert(0, simulatedEvent);
+      if (_historyEvents.length > 20) {
+        _historyEvents.removeLast();
+      }
+    }
+
+    // 🎯 Mô phỏng cảnh báo nguy hiểm
+    if (_isDriving && _currentTiltStatus.contains("ĐANG XEM") && _isActiveBrowsing) {
+      _simulateDangerAlert();
+    }
+  }
+
+  void _simulateDangerAlert() {
+    if (_latestDangerEvent == null || 
+        DateTime.now().difference(_latestDangerEvent!.timestamp).inSeconds > 10) {
+      
+      final dangerEvent = MonitorEvent(
+        type: 'DANGER_EVENT',
+        message: 'CẢNH BÁO NGUY HIỂM: Đang lái xe và LƯỚT WEB!',
+        tiltValue: _latestTiltEvent?.tiltValue,
+        tiltPercent: _latestTiltEvent?.tiltPercent,
+        speed: _currentSpeed,
+        isDriving: true,
+        isNetworkActive: true,
+        zStability: _latestTiltEvent?.zStability,
+        timestamp: DateTime.now(),
+        isActiveBrowsing: true,
+      );
+
+      setState(() {
+        _latestDangerEvent = dangerEvent;
+        _historyEvents.insert(0, dangerEvent);
+      });
+    }
   }
 
   void _updateTiltAverage(double tiltPercent) {
@@ -298,12 +301,13 @@ class _MonitorScreenState extends State<MonitorScreen> {
     }
   }
 
+  // 🎯 XỬ LÝ SỰ KIỆN THỰC (CHỈ iOS)
   void _onEvent(dynamic event) {
     if (_isUpdating) return;
     _isUpdating = true;
     
     setState(() {
-      _connectionStatus = "Đã kết nối";
+      _connectionStatus = "Đã kết nối iOS Native";
       try {
         final Map<String, dynamic> data = jsonDecode(event as String);
         final monitorEvent = MonitorEvent.fromJson(data);
@@ -324,9 +328,8 @@ class _MonitorScreenState extends State<MonitorScreen> {
           _historyEvents.insert(0, monitorEvent);
         } else if (monitorEvent.type == 'TRAFFIC_ANALYSIS') {
           _isActiveBrowsing = monitorEvent.isActiveBrowsing ?? false;
-          // 🆕 CẬP NHẬT: Dùng tốc độ thực tế từ speed test, không dùng dữ liệu mô phỏng
-          // _networkUploadSpeed = monitorEvent.networkUploadSpeed ?? 0.0;
-          // _networkDownloadSpeed = monitorEvent.networkDownloadSpeed ?? 0.0;
+          _networkUploadSpeed = monitorEvent.networkUploadSpeed ?? 0.0;
+          _networkDownloadSpeed = monitorEvent.networkDownloadSpeed ?? 0.0;
           _historyEvents.insert(0, monitorEvent);
         } else if (monitorEvent.type == 'DRIVING_STATUS' || monitorEvent.type == 'LOCATION_UPDATE') {
           _currentSpeed = monitorEvent.speed ?? 0.0;
@@ -359,11 +362,15 @@ class _MonitorScreenState extends State<MonitorScreen> {
     });
   }
 
-  // 🆕 HÀM MỚI: Test tốc độ thủ công
+  // 🎯 MANUAL SPEED TEST (ĐA NỀN TẢNG)
   void _manualSpeedTest() {
-    _testInternetSpeed();
+    setState(() {
+      _networkDownloadSpeed = 100 + _random.nextDouble() * 400;
+      _networkUploadSpeed = 50 + _random.nextDouble() * 150;
+    });
   }
 
+  // 🎯 UI WIDGETS (GIỮ NGUYÊN)
   Widget _buildDangerAlertCard() {
     if (_latestDangerEvent == null) return const SizedBox.shrink();
 
@@ -410,6 +417,11 @@ class _MonitorScreenState extends State<MonitorScreen> {
               Text(
                 'Tilt: ${_latestDangerEvent!.tiltPercent!.toStringAsFixed(1)}% | Web: ${_isActiveBrowsing ? "Đang lướt" : "Không lướt"} | Tốc độ: ${_currentSpeed.toStringAsFixed(1)} km/h',
                 style: const TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+            if (!_isIOS)
+              Text(
+                '⚠️ Dữ liệu mô phỏng',
+                style: TextStyle(color: Colors.yellow.shade300, fontSize: 10),
               ),
           ],
         ),
@@ -464,6 +476,11 @@ class _MonitorScreenState extends State<MonitorScreen> {
                 color: Colors.white70,
               ),
             ),
+            if (!_isIOS)
+              Text(
+                '📱 Nền tảng: $_platformName',
+                style: const TextStyle(fontSize: 12, color: Colors.white60),
+              ),
           ],
         ),
       ),
@@ -501,82 +518,54 @@ class _MonitorScreenState extends State<MonitorScreen> {
                         ),
                       ),
                       Text(
-                        'WiFi: $_wifiName',
+                        'Nền tảng: $_platformName',
                         style: const TextStyle(fontSize: 12, color: Colors.white70),
                       ),
                     ],
                   ),
                 ),
-                // 🆕 NÚT TEST TỐC ĐỘ
                 IconButton(
-                  icon: Icon(
-                    _isTestingSpeed ? Icons.refresh : Icons.speed,
-                    color: _isTestingSpeed ? Colors.orange : Colors.green,
-                  ),
-                  onPressed: _isTestingSpeed ? null : _manualSpeedTest,
+                  icon: const Icon(Icons.refresh, color: Colors.green),
+                  onPressed: _manualSpeedTest,
                   tooltip: 'Test tốc độ mạng',
                 ),
               ],
             ),
             const SizedBox(height: 8),
-            
-            // 🆕 HIỂN THỊ TỐC ĐỘ THỰC TẾ
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
                 Column(
                   children: [
-                    Icon(Icons.upload, 
-                         color: _isTestingSpeed ? Colors.orange : Colors.green.shade400, 
-                         size: 24),
+                    Icon(Icons.upload, color: Colors.green.shade400, size: 24),
                     const SizedBox(height: 4),
                     Text(
                       'Upload\n${_networkUploadSpeed.toStringAsFixed(1)} KB/s',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 12,
-                        color: _isTestingSpeed ? Colors.orange : Colors.green.shade400,
+                        color: Colors.green.shade400,
                       ),
                     ),
                   ],
                 ),
                 Column(
                   children: [
-                    Icon(Icons.download, 
-                         color: _isTestingSpeed ? Colors.orange : Colors.orange.shade400, 
-                         size: 24),
+                    Icon(Icons.download, color: Colors.orange.shade400, size: 24),
                     const SizedBox(height: 4),
                     Text(
                       'Download\n${_networkDownloadSpeed.toStringAsFixed(1)} KB/s',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 12,
-                        color: _isTestingSpeed ? Colors.orange : Colors.orange.shade400,
+                        color: Colors.orange.shade400,
                       ),
                     ),
                   ],
                 ),
               ],
             ),
-            
             const SizedBox(height: 8),
-            
-            // 🆕 TRẠNG THÁI TEST TỐC ĐỘ
-            if (_isTestingSpeed)
-              LinearProgressIndicator(
-                backgroundColor: Colors.grey.shade700,
-                valueColor: AlwaysStoppedAnimation<Color>(Colors.blue.shade400),
-              ),
-            
-            Text(
-              _isTestingSpeed ? 'Đang test tốc độ mạng...' : _speedTestStatus,
-              style: TextStyle(
-                fontSize: 12,
-                color: _isTestingSpeed ? Colors.blue.shade300 : Colors.white70,
-                fontStyle: _isTestingSpeed ? FontStyle.italic : FontStyle.normal,
-              ),
-            ),
-            
             Text(
               _isActiveBrowsing 
                   ? 'Đang có hoạt động lướt web đáng kể'
@@ -586,6 +575,11 @@ class _MonitorScreenState extends State<MonitorScreen> {
                 color: Colors.white70,
               ),
             ),
+            if (!_isIOS)
+              Text(
+                '🔬 Dữ liệu đang được mô phỏng',
+                style: TextStyle(fontSize: 11, color: Colors.yellow.shade300),
+              ),
           ],
         ),
       ),
@@ -612,7 +606,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
                 Icon(Icons.screen_rotation, color: tiltColor, size: 30),
                 const SizedBox(width: 10),
                 const Text(
-                  'Cảm Biến Nghiêng (Gia Tốc Kế)',
+                  'Cảm Biến Nghiêng',
                   style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
                 ),
               ],
@@ -701,6 +695,11 @@ class _MonitorScreenState extends State<MonitorScreen> {
               Text(
                 'Cập nhật: ${_latestTiltEvent!.timestamp.toString().substring(11, 19)}',
                 style: const TextStyle(fontSize: 12, color: Colors.white54),
+              ),
+            if (!_isIOS)
+              Text(
+                '🖥️ Đang chạy trên $_platformName - Dữ liệu mô phỏng',
+                style: TextStyle(fontSize: 11, color: Colors.blue.shade300),
               ),
           ],
         ),
@@ -902,6 +901,8 @@ class _MonitorScreenState extends State<MonitorScreen> {
           subtitle,
           style: const TextStyle(color: Colors.white70),
         ),
+        // 🎯 SỬA LỖI: Thay Icons.simulation bằng Icons.computer
+        trailing: !_isIOS ? Icon(Icons.computer, color: Colors.blue.shade300, size: 16) : null,
       ),
     );
   }
@@ -911,6 +912,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Theo Dõi An Toàn Lái Xe'),
+        backgroundColor: _isIOS ? Colors.blue.shade900 : Colors.purple.shade900,
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(48.0),
           child: Column(
@@ -921,7 +923,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(vertical: 4.0),
                 child: Text(
-                  'Kết nối: $_connectionStatus | Tilt: ${_averageTiltPercent.toStringAsFixed(1)}% | Tốc độ: ${_currentSpeed.toStringAsFixed(1)} km/h | Web: ${_isActiveBrowsing ? "Đang lướt" : "Không lướt"} | ${_isTestingSpeed ? "Đang test tốc độ..." : "↑${_networkUploadSpeed.toStringAsFixed(1)} ↓${_networkDownloadSpeed.toStringAsFixed(1)} KB/s"}',
+                  '$_connectionStatus | Tilt: ${_averageTiltPercent.toStringAsFixed(1)}% | Tốc độ: ${_currentSpeed.toStringAsFixed(1)} km/h | Web: ${_isActiveBrowsing ? "Đang lướt" : "Không lướt"}',
                   textAlign: TextAlign.center,
                   style: const TextStyle(fontSize: 12, color: Colors.white70),
                 ),
@@ -965,13 +967,34 @@ class _MonitorScreenState extends State<MonitorScreen> {
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.only(left: 16.0, right: 16.0, top: 10.0, bottom: 8.0),
-                child: Text(
-                  'Lịch Sử Sự Kiện',
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.blueAccent,
-                  ),
+                child: Row(
+                  children: [
+                    Text(
+                      'Lịch Sử Sự Kiện',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.blueAccent,
+                      ),
+                    ),
+                    if (!_isIOS)
+                      Container(
+                        margin: EdgeInsets.only(left: 10),
+                        padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.purple.shade800,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(
+                          'SIM',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
               ),
             ),
@@ -980,10 +1003,19 @@ class _MonitorScreenState extends State<MonitorScreen> {
                     child: Center(
                       child: Padding(
                         padding: const EdgeInsets.all(32.0),
-                        child: Text(
-                          'Chưa có sự kiện nào được ghi lại.',
-                          style: TextStyle(color: Colors.white70, fontSize: 16),
-                          textAlign: TextAlign.center,
+                        child: Column(
+                          children: [
+                            Text(
+                              'Chưa có sự kiện nào được ghi lại.',
+                              style: TextStyle(color: Colors.white70, fontSize: 16),
+                              textAlign: TextAlign.center,
+                            ),
+                            if (!_isIOS)
+                              Text(
+                                '(Dữ liệu sẽ được mô phỏng tự động)',
+                                style: TextStyle(color: Colors.blue.shade300, fontSize: 12),
+                              ),
+                          ],
                         ),
                       ),
                     ),
