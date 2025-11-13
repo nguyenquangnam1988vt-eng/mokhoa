@@ -25,10 +25,12 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
     private var realNetworkMonitor: RealNetworkMonitor?
     private var isActiveBrowsing = false
     
-    // 🎯 CẢI THIỆN TỐC ĐỘ - THÊM BIẾN LỌC
+    // 🎯 CẢI THIỆN TỐC ĐỘ - THÊM BIẾN LỌC VÀ TÍNH TOÁN
     private var speedHistory: [Double] = []
     private let speedHistorySize = 5
     private var lastValidLocation: CLLocation?
+    private var locationHistory: [CLLocation] = []
+    private let maxLocationHistory = 10
     
     // Ngưỡng
     private let drivingSpeedThreshold: Double = 10.0 // km/h
@@ -165,15 +167,16 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         networkMonitor?.start(queue: queue)
     }
     
-    // MARK: - Location Monitoring
+    // MARK: - Location Monitoring - CẢI THIỆN ĐỘ CHÍNH XÁC
     
     private func setupLocationMonitoring() {
         if locationManager == nil {
             let manager = CLLocationManager()
             manager.delegate = self
             
+            // 🎯 SỬ DỤNG GPS ĐỘ CHÍNH XÁC CAO
             manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
-            manager.distanceFilter = 5.0
+            manager.distanceFilter = 5.0 // 🎯 Chỉ update khi di chuyển 5m
             manager.activityType = .automotiveNavigation
             manager.allowsBackgroundLocationUpdates = true
             manager.pausesLocationUpdatesAutomatically = false
@@ -194,20 +197,29 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         }
     }
     
-    // MARK: - CLLocationManagerDelegate
+    // MARK: - CLLocationManagerDelegate - TÍNH TỐC ĐỘ CHÍNH XÁC
     
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let location = locations.last else { return }
         
+        // 🎯 KIỂM TRA ĐỘ CHÍNH XÁC CỦA LOCATION
         guard location.horizontalAccuracy >= 0 && location.horizontalAccuracy <= 65.0 else {
             print("📍 Bỏ qua location - độ chính xác kém: \(location.horizontalAccuracy)m")
             return
         }
         
+        // 🎯 THÊM VÀO LỊCH SỬ VỊ TRÍ
+        locationHistory.append(location)
+        if locationHistory.count > maxLocationHistory {
+            locationHistory.removeFirst()
+        }
+        
+        // 🎯 TÍNH TỐC ĐỘ CHÍNH XÁC DỰA TRÊN KHOẢNG CÁCH VÀ THỜI GIAN
         let calculatedSpeed = calculateAccurateSpeed(currentLocation: location)
+        
         updateDrivingStatus(speed: calculatedSpeed)
         
-        // 🎯 THÔNG BÁO CHO NETWORK MONITORS - GIẢM COOLDOWN
+        // 🎯 THÔNG BÁO CHO NETWORK MONITORS
         realNetworkMonitor?.notifyLocationUpdate()
         networkCongestionDetector?.setLocationUpdateCooldown()
         
@@ -225,46 +237,70 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         lastLocation = location
     }
     
+    // 🎯 TÍNH TỐC ĐỘ CHÍNH XÁC DỰA TRÊN KHOẢNG CÁCH VÀ THỜI GIAN
     private func calculateAccurateSpeed(currentLocation: CLLocation) -> Double {
         var speed = currentLocation.speed
         
-        if let lastValidLoc = lastValidLocation {
-            let timeDifference = currentLocation.timestamp.timeIntervalSince(lastValidLoc.timestamp)
-            let distance = currentLocation.distance(from: lastValidLoc)
+        // 🎯 PHƯƠNG PHÁP 1: TÍNH TỐC ĐỘ TỪ KHOẢNG CÁCH GIỮA CÁC VỊ TRÍ
+        if locationHistory.count >= 2 {
+            let recentLocations = Array(locationHistory.suffix(3)) // Lấy 3 vị trí gần nhất
             
-            if timeDifference > 0 {
-                let calculatedSpeed = distance / timeDifference
+            var totalDistance: Double = 0
+            var totalTime: Double = 0
+            
+            for i in 1..<recentLocations.count {
+                let prevLocation = recentLocations[i-1]
+                let currLocation = recentLocations[i]
                 
+                let distance = currLocation.distance(from: prevLocation) // mét
+                let time = currLocation.timestamp.timeIntervalSince(prevLocation.timestamp) // giây
+                
+                if time > 0 && distance >= 0 {
+                    totalDistance += distance
+                    totalTime += time
+                }
+            }
+            
+            if totalTime > 0 && totalDistance > 0 {
+                let calculatedSpeed = totalDistance / totalTime // m/s
+                
+                // 🎯 KIỂM TRA TỐC ĐỘ HỢP LỆ (0-50 m/s ≈ 0-180 km/h)
                 if calculatedSpeed >= 0 && calculatedSpeed < 50 {
                     speed = calculatedSpeed
-                    print("🎯 Calculated speed: \(calculatedSpeed * 3.6) km/h (from distance: \(distance)m, time: \(timeDifference)s)")
+                    print("🎯 Calculated speed from distance: \(calculatedSpeed * 3.6) km/h (distance: \(totalDistance)m, time: \(totalTime)s)")
                 }
             }
         }
         
+        // 🎯 PHƯƠNG PHÁP 2: LỌC TỐC ĐỘ BẤT THƯỜNG
         let filteredSpeed = filterAbnormalSpeed(speed)
-        lastValidLocation = currentLocation
         
         return filteredSpeed
     }
     
+    // 🎯 LỌC TỐC ĐỘ BẤT THƯỜNG
     private func filterAbnormalSpeed(_ speed: Double) -> Double {
+        // 🎯 CHỈ CHẤP NHẬN TỐC ĐỘ HỢP LỆ (0-50 m/s ≈ 0-180 km/h)
         guard speed >= 0 && speed < 50.0 else {
             print("📍 Bỏ qua tốc độ không hợp lệ: \(speed * 3.6) km/h")
             return 0.0
         }
         
+        // 🎯 THÊM VÀO LỊCH SỬ TỐC ĐỘ
         speedHistory.append(speed)
         if speedHistory.count > speedHistorySize {
             speedHistory.removeFirst()
         }
         
+        // 🎯 TÍNH TRUNG BÌNH ĐỂ LÀM MỊN
         let averageSpeed = speedHistory.reduce(0, +) / Double(speedHistory.count)
         
+        // 🎯 KIỂM TRA SỰ THAY ĐỔI ĐỘT NGỘT
         if speedHistory.count >= 2 {
             let lastSpeed = speedHistory[speedHistory.count - 2]
             let speedChange = abs(averageSpeed - lastSpeed)
             
+            // 🎯 NẾU THAY ĐỔI QUÁ LỚN (>10 m/s ≈ 36 km/h), GIỮ TỐC ĐỘ CŨ
             if speedChange > 10.0 {
                 print("📍 Tốc độ thay đổi đột ngột: \(lastSpeed * 3.6) -> \(averageSpeed * 3.6) km/h")
                 return lastSpeed
@@ -274,13 +310,15 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         return averageSpeed
     }
     
+    // 🎯 CẬP NHẬT TRẠNG THÁI LÁI XE
     private func updateDrivingStatus(speed: Double) {
         let previousSpeed = currentSpeed
-        currentSpeed = speed * 3.6
+        currentSpeed = speed * 3.6 // Chuyển sang km/h
         
         let wasDriving = isDriving
         isDriving = currentSpeed >= drivingSpeedThreshold
         
+        // 🎯 CHỈ GỬI SỰ KIỆN KHI CÓ THAY ĐỔI ĐÁNG KỂ
         if isDriving != wasDriving || abs(currentSpeed - previousSpeed) > 5.0 {
             let statusTime = Date()
             let statusData: [String: Any] = [
@@ -298,7 +336,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         }
     }
     
-    // MARK: - Tilt Monitoring
+    // MARK: - Tilt Monitoring (giữ nguyên)
     
     private func setupTiltMonitoring() {
         if motionManager == nil {
@@ -421,7 +459,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         self.sendEventToFlutter(tiltData)
     }
     
-    // MARK: - Lock/Unlock Observers
+    // MARK: - Lock/Unlock Observers (giữ nguyên)
     
     private func setupLockUnlockObservers() {
         NotificationCenter.default.addObserver(self,
@@ -544,7 +582,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
     }
 }
 
-// 🎯 SỬA REAL NETWORK MONITOR - LOẠI BỎ COOLDOWN BLOCKING
+// 🎯 REAL NETWORK MONITOR VỚI NGƯỠNG CAO 500KB
 class RealNetworkMonitor {
     private var timer: Timer?
     private var lastNetworkStats: NetworkInterfaceStats?
@@ -578,8 +616,7 @@ class RealNetworkMonitor {
     }
     
     private func checkRealNetworkActivity() {
-        // 🎯 SỬA: VẪN TIẾP TỤC KIỂM TRA NGAY CẢ KHI CÓ LOCATION UPDATE
-        // Chỉ ghi log, không block detection
+        // 🎯 VẪN TIẾP TỤC KIỂM TRA NGAY CẢ KHI CÓ LOCATION UPDATE
         if let cooldown = locationUpdateCooldown, Date().timeIntervalSince(cooldown) < 2.0 {
             print("📍 Real Network Monitor: Location update detected, but continuing network check...")
             // VẪN TIẾP TỤC, KHÔNG RETURN
@@ -594,7 +631,7 @@ class RealNetworkMonitor {
             activitySamples.removeFirst()
         }
         
-        // 🎯 TĂNG NGƯỠNG XÁC NHẬN ĐỂ TRÁNH DƯƠNG TÍNH GIẢ
+        // 🎯 NGƯỠNG XÁC NHẬN CAO HƠN
         let activeCount = activitySamples.filter { $0 }.count
         let confirmedActive = activeCount >= 3
         
@@ -623,25 +660,24 @@ class RealNetworkMonitor {
     private func detectRealNetworkActivity(currentStats: NetworkInterfaceStats) -> Bool {
         guard let lastStats = lastNetworkStats else { return false }
         
-        // 🎯 TÍNH TRAFFIC TRONG KHOẢNG THỜI GIAN GẦN ĐÂY
         let receivedDiff = currentStats.bytesReceived - lastStats.bytesReceived
         let sentDiff = currentStats.bytesSent - lastStats.bytesSent
         let packetsDiff = currentStats.packetsReceived - lastStats.packetsReceived
         
         print("🌐 Traffic Diff - Received: \(receivedDiff), Sent: \(sentDiff), Packets: \(packetsDiff)")
         
-        // 🎯 TĂNG NGƯỠNG LÊN CAO ĐỂ CHỈ PHÁT HIỆN KHI THỰC SỰ LƯỚT WEB
-        let hasSignificantDownload = receivedDiff > 10000  // ⬅️ Phải có ít nhất 10KB download
-        let hasSignificantUpload = sentDiff > 5000         // ⬅️ Phải có ít nhất 5KB upload
-        let hasPacketActivity = packetsDiff > 10
-        let hasActiveConnections = currentStats.activeConnections > 2
+        // 🎯 TĂNG NGƯỠNG RẤT CAO - CHỈ PHÁT HIỆN KHI THỰC SỰ LƯỚT WEB MẠNH
+        let hasSignificantDownload = receivedDiff > 500000  // ⬅️ 500KB download
+        let hasSignificantUpload = sentDiff > 200000        // ⬅️ 200KB upload
+        let hasPacketActivity = packetsDiff > 50
+        let hasActiveConnections = currentStats.activeConnections > 3
         
-        // 🎯 CHỈ TÍNH LÀ ACTIVITY KHI CÓ NHIỀU YẾU TỐ
+        // 🎯 CHỈ TÍNH LÀ ACTIVITY KHI CÓ TRAFFIC RẤT LỚN
         let isActive = (hasSignificantDownload && hasPacketActivity) || 
                       (hasSignificantUpload && hasPacketActivity) ||
-                      (hasActiveConnections && (hasSignificantDownload || hasSignificantUpload))
+                      (hasActiveConnections && hasSignificantDownload)
         
-        print("🌐 Network Activity Result: \(isActive)")
+        print("🌐 Network Activity Result: \(isActive) - Threshold: 500KB")
         return isActive
     }
     
@@ -705,7 +741,7 @@ struct NetworkInterfaceStats {
     var activeConnections: Int = 0
 }
 
-// 🎯 SỬA NETWORK CONGESTION DETECTOR - TĂNG NGƯỠNG
+// 🎯 NETWORK CONGESTION DETECTOR VỚI NGƯỠNG CAO
 class NetworkCongestionDetector {
     private var pingTimer: Timer?
     private var latencySamples: [Double] = []
@@ -737,7 +773,7 @@ class NetworkCongestionDetector {
     }
     
     private func performNetworkAnalysis() {
-        // 🎯 SỬA: VẪN TIẾP TỤC PHÂN TÍCH KHI CÓ LOCATION UPDATE
+        // 🎯 VẪN TIẾP TỤC PHÂN TÍCH KHI CÓ LOCATION UPDATE
         if let cooldown = locationUpdateCooldown, Date().timeIntervalSince(cooldown) < 3.0 {
             print("📍 Network Congestion Detector: Location cooldown active, but continuing analysis...")
             // VẪN TIẾP TỤC, KHÔNG RETURN
@@ -796,7 +832,7 @@ class NetworkCongestionDetector {
     }
     
     private func detectWebBrowsingActivity() -> Bool {
-        // 🎯 KHI CÓ LOCATION UPDATE, COI NHƯ KHÔNG CÓ WEB BROWSING ĐỂ TRÁNH DƯƠNG TÍNH GIẢ
+        // 🎯 KHI CÓ LOCATION UPDATE, COI NHƯ KHÔNG CÓ WEB BROWSING
         if let cooldown = locationUpdateCooldown, Date().timeIntervalSince(cooldown) < 3.0 {
             return false
         }
@@ -804,8 +840,8 @@ class NetworkCongestionDetector {
         let requestRate = calculateRequestRate()
         let hasBurstPattern = detectBurstPattern()
         
-        // 🎯 TĂNG NGƯỠNG LÊN CAO - CHỈ COI LÀ "LƯỚT WEB" KHI CÓ NHIỀU REQUEST
-        let isBrowsing = (requestRate > 5.0 && hasBurstPattern) // ⬅️ Tăng từ 2.0 lên 5.0
+        // 🎯 TĂNG NGƯỠNG RẤT CAO
+        let isBrowsing = (requestRate > 8.0 && hasBurstPattern) // ⬅️ Tăng từ 5.0 lên 8.0
         
         print("📊 Web Browsing Detection - Rate: \(requestRate), Burst: \(hasBurstPattern), Result: \(isBrowsing)")
         
@@ -827,7 +863,7 @@ class NetworkCongestionDetector {
             requestCount = 0
         }
         
-        return requestCount > 8
+        return requestCount > 15  // ⬅️ Tăng từ 8 lên 15
     }
     
     private func detectHighLatency() -> Bool {
