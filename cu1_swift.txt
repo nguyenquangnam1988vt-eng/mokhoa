@@ -6,9 +6,8 @@ import Flutter
 import Network
 import SystemConfiguration
 import CoreTelephony
-import AVFoundation
 
-// 🎯 CLASS CALL DETECTOR CHO CUỘC GỌI DI ĐỘNG
+// 🎯 THÊM CLASS CALL DETECTOR
 class CallDetectorManager: NSObject {
     private let callCenter = CTCallCenter()
     private var isInCall = false
@@ -61,136 +60,6 @@ class CallDetectorManager: NSObject {
     }
 }
 
-// 🎯 CLASS VOIP CALL DETECTOR CHO ZALO/FACEBOOK
-class VoIPCallDetector: NSObject {
-    private let audioSession = AVAudioSession.sharedInstance()
-    private var isInVoIPCall = false
-    private var voipCallStartTime: Date?
-    private var lastAudioRoute: String = ""
-    
-    var onVoIPCallStateChanged: ((Bool, String) -> Void)?
-    
-    func startMonitoring() {
-        // Lắng nghe thay đổi audio route
-        NotificationCenter.default.addObserver(self,
-            selector: #selector(audioRouteChanged),
-            name: AVAudioSession.routeChangeNotification,
-            object: nil)
-        
-        // Lắng nghe thay đổi audio session
-        NotificationCenter.default.addObserver(self,
-            selector: #selector(audioSessionInterrupted),
-            name: AVAudioSession.interruptionNotification,
-            object: nil)
-        
-        print("📱 VoIP Call Detector started")
-    }
-    
-    func stopMonitoring() {
-        NotificationCenter.default.removeObserver(self)
-    }
-    
-    @objc private func audioRouteChanged(notification: Notification) {
-        DispatchQueue.main.async {
-            self.checkCurrentAudioState()
-        }
-    }
-    
-    @objc private func audioSessionInterrupted(notification: Notification) {
-        guard let userInfo = notification.userInfo,
-              let interruptionType = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt else { return }
-        
-        DispatchQueue.main.async {
-            if interruptionType == AVAudioSession.InterruptionType.began.rawValue {
-                // Cuộc gọi bắt đầu
-                self.handleVoIPCallStarted()
-            } else if interruptionType == AVAudioSession.InterruptionType.ended.rawValue {
-                // Cuộc gọi kết thúc
-                self.handleVoIPCallEnded()
-            }
-        }
-    }
-    
-    private func checkCurrentAudioState() {
-        let currentRoute = audioSession.currentRoute
-        
-        // 🎯 PHÁT HIỆN CUỘC GỌI VoIP DỰA TRÊN AUDIO ROUTE
-        let isLikelyInVoIPCall = isAudioRouteIndicatingCall(currentRoute)
-        
-        if isLikelyInVoIPCall && !isInVoIPCall {
-            handleVoIPCallStarted()
-        } else if !isLikelyInVoIPCall && isInVoIPCall {
-            handleVoIPCallEnded()
-        }
-        
-        lastAudioRoute = describeAudioRoute(currentRoute)
-    }
-    
-    private func isAudioRouteIndicatingCall(_ route: AVAudioSessionRouteDescription) -> Bool {
-        // Kiểm tra xem audio route có chỉ ra đang trong cuộc gọi không
-        let hasMicrophone = route.inputs.contains { $0.portType == .builtInMic }
-        let hasReceiver = route.outputs.contains { $0.portType == .builtInReceiver }
-        let hasSpeaker = route.outputs.contains { $0.portType == .builtInSpeaker }
-        let hasHeadphones = route.outputs.contains { $0.portType == .headphones }
-        
-        // 🎯 CÁC TÌNH HUỐNG CHO THẤY ĐANG TRONG CUỘC GỌI VOIP:
-        // 1. Có mic + receiver (áp tai nghe) - Zalo/Facebook call
-        // 2. Có mic + speaker (loa ngoài) - Zalo/Facebook call loa ngoài
-        // 3. Có mic + headphones (tai nghe) - Zalo/Facebook call tai nghe
-        let isInCall = hasMicrophone && (hasReceiver || hasSpeaker || hasHeadphones)
-        
-        print("🎧 VoIP Audio Route - Mic: \(hasMicrophone), Receiver: \(hasReceiver), Speaker: \(hasSpeaker) -> InCall: \(isInCall)")
-        return isInCall
-    }
-    
-    private func handleVoIPCallStarted() {
-        isInVoIPCall = true
-        voipCallStartTime = Date()
-        
-        let callType = determineCallType()
-        onVoIPCallStateChanged?(true, callType)
-        
-        print("📱 VoIP Call STARTED: \(callType)")
-    }
-    
-    private func handleVoIPCallEnded() {
-        isInVoIPCall = false
-        voipCallStartTime = nil
-        onVoIPCallStateChanged?(false, "ended")
-        
-        print("📱 VoIP Call ENDED")
-    }
-    
-    private func determineCallType() -> String {
-        let currentRoute = audioSession.currentRoute
-        
-        if currentRoute.outputs.contains(where: { $0.portType == .builtInReceiver }) {
-            return "voip_ear" // Gọi áp tai
-        } else if currentRoute.outputs.contains(where: { $0.portType == .builtInSpeaker }) {
-            return "voip_speaker" // Gọi loa ngoài
-        } else if currentRoute.outputs.contains(where: { $0.portType == .headphones }) {
-            return "voip_headphones" // Gọi tai nghe
-        } else {
-            return "voip_unknown"
-        }
-    }
-    
-    private func describeAudioRoute(_ route: AVAudioSessionRouteDescription) -> String {
-        let inputs = route.inputs.map { $0.portType.rawValue }.joined(separator: ", ")
-        let outputs = route.outputs.map { $0.portType.rawValue }.joined(separator: ", ")
-        return "Inputs: [\(inputs)], Outputs: [\(outputs)]"
-    }
-    
-    func isCurrentlyInVoIPCall() -> Bool {
-        return isInVoIPCall
-    }
-    
-    func getVoIPCallDuration() -> TimeInterval? {
-        guard let startTime = voipCallStartTime else { return nil }
-        return Date().timeIntervalSince(startTime)
-    }
-}
-
 @objcMembers
 class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
     
@@ -221,13 +90,6 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
     private var lastCallAlertTime: Date?
     private let callAlertCooldown: TimeInterval = 10.0 // 10 giây giữa các cảnh báo call
     
-    // 📞 THÊM VOIP DETECTION
-    private var voipCallDetector: VoIPCallDetector?
-    private var isInVoIPCall = false
-    private var voipCallStartTime: Date?
-    private var lastVoIPAlertTime: Date?
-    private let voipAlertCooldown: TimeInterval = 10.0 // 10 giây giữa các cảnh báo VoIP
-    
     // Ngưỡng
     private let drivingSpeedThreshold: Double = 10.0 // km/h
     private let viewingPhoneThreshold: Double = 80.0
@@ -247,8 +109,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         setupNetworkCongestionDetection()
         setupRealNetworkMonitoring()
         setupSpeedUpdateTimer()
-        setupCallDetection()
-        setupVoIPDetection() // 🎯 THÊM DÒNG NÀY
+        setupCallDetection() // 🎯 THÊM DÒNG NÀY
     }
     
     // MARK: - FlutterStreamHandler Methods
@@ -274,10 +135,9 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         setupLockUnlockObservers()
         networkCongestionDetector?.startMonitoring()
         realNetworkMonitor?.startMonitoring()
-        callDetector?.startMonitoring()
-        voipCallDetector?.startMonitoring() // 🎯 THÊM DÒNG NÀY
+        callDetector?.startMonitoring() // 🎯 THÊM DÒNG NÀY
         
-        print("Unlock Monitor: Đã đăng ký và bắt đầu theo dõi (bao gồm call + VoIP detection).")
+        print("Unlock Monitor: Đã đăng ký và bắt đầu theo dõi (bao gồm call detection).")
     }
     
     func stopMonitoring() {
@@ -286,50 +146,9 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         networkMonitor?.cancel()
         networkCongestionDetector?.stopMonitoring()
         realNetworkMonitor?.stopMonitoring()
-        callDetector = nil
-        voipCallDetector?.stopMonitoring() // 🎯 THÊM DÒNG NÀY
-        voipCallDetector = nil
+        callDetector = nil // 🎯 THÊM DÒNG NÀY
         speedUpdateTimer?.invalidate()
         NotificationCenter.default.removeObserver(self)
-    }
-    
-    // 🎯 THÊM PHƯƠNG THỨC VOIP DETECTION
-    private func setupVoIPDetection() {
-        voipCallDetector = VoIPCallDetector()
-        voipCallDetector?.onVoIPCallStateChanged = { [weak self] isInCall, callType in
-            guard let self = self else { return }
-            
-            let wasInVoIPCall = self.isInVoIPCall
-            self.isInVoIPCall = isInCall
-            
-            if isInCall {
-                self.voipCallStartTime = Date()
-            } else {
-                self.voipCallStartTime = nil
-            }
-            
-            // Gửi sự kiện VoIP call state tới Flutter
-            let callTime = Date()
-            let callData: [String: Any] = [
-                "type": "VOIP_CALL_EVENT",
-                "message": isInCall ? "Đang trong cuộc gọi Zalo/Facebook (\(callType))" : "Đã kết thúc cuộc gọi Zalo/Facebook",
-                "isInCall": isInCall,
-                "isVoIPCall": true,
-                "callType": callType,
-                "callDuration": self.voipCallDetector?.getVoIPCallDuration() ?? 0,
-                "timestamp": Int(callTime.timeIntervalSince1970 * 1000)
-            ]
-            
-            self.sendEventToFlutter(callData)
-            print("📱 VoIP Call State: \(isInCall ? "ACTIVE" : "ENDED") - Type: \(callType)")
-            
-            // 🚨 KIỂM TRA CẢNH BÁO NẾU ĐANG LÁI XE
-            if isInCall && self.isDriving && !wasInVoIPCall {
-                self.checkVoIPCallWhileDrivingAlert(callType: callType)
-            }
-        }
-        
-        voipCallDetector?.startMonitoring()
     }
     
     // 🎯 THÊM PHƯƠNG THỨC CALL DETECTION
@@ -418,48 +237,9 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         print("🚨 CALL DANGER ALERT: Driving + Phone Call! Speed: \(currentSpeed) km/h")
     }
     
-    // 🎯 THÊM HÀM CẢNH BÁO CHO VOIP CALL
-    private func checkVoIPCallWhileDrivingAlert(callType: String) {
-        guard canSendVoIPAlert() else { return }
-        
-        let dangerTime = Date()
-        lastVoIPAlertTime = dangerTime
-        
-        let appName = getAppNameFromCallType(callType)
-        let callDuration = voipCallDetector?.getVoIPCallDuration() ?? 0
-        
-        let dangerData: [String: Any] = [
-            "type": "DANGER_EVENT",
-            "message": "CẢNH BÁO NGUY HIỂM: Đang lái xe và GỌI \(appName)!",
-            "speed": currentSpeed,
-            "isInCall": true,
-            "isVoIPCall": true,
-            "callType": callType,
-            "callDuration": callDuration,
-            "timestamp": Int(dangerTime.timeIntervalSince1970 * 1000)
-        ]
-        
-        self.sendEventToFlutter(dangerData)
-        self.sendCriticalNotification(
-            title: "CẢNH BÁO NGUY HIỂM!",
-            message: "Đang lái xe ở \(String(format: "%.1f", currentSpeed)) km/h và GỌI \(appName)!"
-        )
-        
-        print("🚨 VOIP CALL DANGER ALERT: Driving + \(appName) Call! Speed: \(currentSpeed) km/h, Duration: \(callDuration)s")
-    }
-    
     private func canSendCallAlert() -> Bool {
         guard let lastAlert = lastCallAlertTime else { return true }
         return Date().timeIntervalSince(lastAlert) >= callAlertCooldown
-    }
-    
-    private func canSendVoIPAlert() -> Bool {
-        guard let lastAlert = lastVoIPAlertTime else { return true }
-        return Date().timeIntervalSince(lastAlert) >= voipAlertCooldown
-    }
-    
-    private func getAppNameFromCallType(_ callType: String) -> String {
-        return "ZALO/FACEBOOK"
     }
     
     // 🎯 REAL NETWORK MONITORING THÔNG MINH
@@ -673,14 +453,8 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
             print("🎯 Driving status: \(isDriving ? "DRIVING" : "STOPPED") at \(currentSpeed) km/h")
             
             // 🚨 KIỂM TRA CẢNH BÁO NẾU BẮT ĐẦU LÁI XE KHI ĐANG NGHE ĐIỆN THOẠI
-            if isDriving && !wasDriving && (isInCall || isInVoIPCall) {
-                if isInCall {
-                    checkCallWhileDrivingAlert()
-                }
-                if isInVoIPCall {
-                    let callType = voipCallDetector?.getVoIPCallDuration() != nil ? "voip_active" : "voip_unknown"
-                    checkVoIPCallWhileDrivingAlert(callType: callType)
-                }
+            if isDriving && !wasDriving && isInCall {
+                checkCallWhileDrivingAlert()
             }
         }
     }
@@ -709,7 +483,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
                 return
             }
             
-            if let accelerometerData = data {
+            if self.isDeviceUnlocked, let accelerometerData = data {
                 let zAcceleration = accelerometerData.acceleration.z
                 self.updateZStability(zValue: zAcceleration)
                 self.handleTiltDetection(zValue: zAcceleration)
@@ -753,14 +527,14 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         return Date().timeIntervalSince(lastAlert) >= dangerAlertCooldown
     }
     
-    // 🎯 CẬP NHẬT HÀM HANDLE TILT DETECTION - THÊM 3 TÌNH HUỐNG CẢNH BÁO
+    // 🎯 CẬP NHẬT HÀM HANDLE TILT DETECTION - THÊM ĐIỀU KIỆN CALL
     private func handleTiltDetection(zValue: Double) {
         let tiltPercent = convertTiltToPercent(zValue)
         let tiltStatus = getTiltStatus(tiltPercent)
         let isViewingPhone = tiltPercent <= viewingPhoneThreshold
         let isZStable = zStability < 1.5
         
-        // 🚨 CẢNH BÁO 1: WEB BROWSING + LÁI XE
+        // 🎯 LOGIC CẢNH BÁO 1: ĐANG LÁI XE + XEM ĐIỆN THOẠI + LƯỚT WEB (CŨ)
         let shouldTriggerWebDangerAlert = isDeviceUnlocked && 
                                          isDriving && 
                                          isViewingPhone && 
@@ -768,30 +542,39 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
                                          isActiveBrowsing &&
                                          canSendDangerAlert()
         
-        // 🚨 CẢNH BÁO 2: CUỘC GỌI DI ĐỘNG + LÁI XE
+        // 🎯 LOGIC CẢNH BÁO 2: ĐANG LÁI XE + NGHE ĐIỆN THOẠI (MỚI)
         let shouldTriggerCallDangerAlert = isDriving && 
                                           isInCall && 
                                           isZStable &&
                                           canSendCallAlert()
         
-        // 🚨 CẢNH BÁO 3: CUỘC GỌI ZALO/FACEBOOK + LÁI XE
-        let shouldTriggerVoIPDangerAlert = isDriving && 
-                                          isInVoIPCall && 
-                                          isZStable &&
-                                          canSendVoIPAlert()
-        
-        // KÍCH HOẠT CÁC CẢNH BÁO
         if shouldTriggerWebDangerAlert {
-            triggerWebDangerAlert(tiltPercent: tiltPercent, zValue: zValue)
+            let dangerTime = Date()
+            lastDangerAlertTime = dangerTime
+            
+            let dangerData: [String: Any] = [
+                "type": "DANGER_EVENT",
+                "message": "CẢNH BÁO NGUY HIỂM: Đang lái xe và LƯỚT WEB!",
+                "tiltValue": zValue,
+                "tiltPercent": tiltPercent,
+                "speed": currentSpeed,
+                "isNetworkActive": isNetworkActive,
+                "isActiveBrowsing": isActiveBrowsing,
+                "zStability": zStability,
+                "timestamp": Int(dangerTime.timeIntervalSince1970 * 1000)
+            ]
+            
+            self.sendEventToFlutter(dangerData)
+            self.sendCriticalNotification(
+                title: "CẢNH BÁO NGUY HIỂM!",
+                message: "Đang lái xe ở \(String(format: "%.1f", currentSpeed)) km/h, sử dụng điện thoại và LƯỚT WEB!"
+            )
+            
+            print("🚨 WEB DANGER ALERT: Driving + Phone Usage + Web Browsing! (Tilt: \(tiltPercent)%)")
         }
         
         if shouldTriggerCallDangerAlert {
             checkCallWhileDrivingAlert()
-        }
-        
-        if shouldTriggerVoIPDangerAlert {
-            let callType = voipCallDetector?.getVoIPCallDuration() != nil ? "voip_active" : "voip_unknown"
-            checkVoIPCallWhileDrivingAlert(callType: callType)
         }
         
         let tiltTime = Date()
@@ -803,39 +586,12 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
             "speed": currentSpeed,
             "isNetworkActive": isNetworkActive,
             "isActiveBrowsing": isActiveBrowsing,
-            "isInCall": isInCall,
-            "isVoIPCall": isInVoIPCall,
+            "isInCall": isInCall, // 🎯 THÊM TRẠNG THÁI CALL
             "zStability": zStability,
             "timestamp": Int(tiltTime.timeIntervalSince1970 * 1000)
         ]
         
         self.sendEventToFlutter(tiltData)
-    }
-    
-    // 🎯 TÁCH HÀM CẢNH BÁO WEB THÀNH RIÊNG
-    private func triggerWebDangerAlert(tiltPercent: Double, zValue: Double) {
-        let dangerTime = Date()
-        lastDangerAlertTime = dangerTime
-        
-        let dangerData: [String: Any] = [
-            "type": "DANGER_EVENT",
-            "message": "CẢNH BÁO NGUY HIỂM: Đang lái xe và LƯỚT WEB!",
-            "tiltValue": zValue,
-            "tiltPercent": tiltPercent,
-            "speed": currentSpeed,
-            "isNetworkActive": isNetworkActive,
-            "isActiveBrowsing": isActiveBrowsing,
-            "zStability": zStability,
-            "timestamp": Int(dangerTime.timeIntervalSince1970 * 1000)
-        ]
-        
-        self.sendEventToFlutter(dangerData)
-        self.sendCriticalNotification(
-            title: "CẢNH BÁO NGUY HIỂM!",
-            message: "Đang lái xe ở \(String(format: "%.1f", currentSpeed)) km/h, sử dụng điện thoại và LƯỚT WEB!"
-        )
-        
-        print("🚨 WEB DANGER ALERT: Driving + Phone Usage + Web Browsing! (Tilt: \(tiltPercent)%)")
     }
     
     // MARK: - Lock/Unlock Observers
@@ -870,8 +626,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
             "location": formatTime(unlockTime),
             "speed": currentSpeed,
             "isDriving": isDriving,
-            "isInCall": isInCall,
-            "isVoIPCall": isInVoIPCall,
+            "isInCall": isInCall, // 🎯 THÊM TRẠNG THÁI CALL
             "timestamp": Int(unlockTime.timeIntervalSince1970 * 1000)
         ]
         
@@ -884,7 +639,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
             )
         }
         
-        print("📱 Device UNLOCKED at \(formatTime(unlockTime)) - Driving: \(isDriving), Speed: \(currentSpeed) km/h, InCall: \(isInCall), VoIPCall: \(isInVoIPCall)")
+        print("📱 Device UNLOCKED at \(formatTime(unlockTime)) - Driving: \(isDriving), Speed: \(currentSpeed) km/h, InCall: \(isInCall)")
     }
     
     @objc func deviceDidLock() {
@@ -897,13 +652,12 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
             "location": formatTime(lockTime),
             "speed": currentSpeed,
             "isDriving": isDriving,
-            "isInCall": isInCall,
-            "isVoIPCall": isInVoIPCall,
+            "isInCall": isInCall, // 🎯 THÊM TRẠNG THÁI CALL
             "timestamp": Int(lockTime.timeIntervalSince1970 * 1000)
         ]
         
         self.sendEventToFlutter(lockData)
-        print("🔒 Device LOCKED at \(formatTime(lockTime)) - Speed: \(currentSpeed) km/h, InCall: \(isInCall), VoIPCall: \(isInVoIPCall)")
+        print("🔒 Device LOCKED at \(formatTime(lockTime)) - Speed: \(currentSpeed) km/h, InCall: \(isInCall)")
     }
     
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {

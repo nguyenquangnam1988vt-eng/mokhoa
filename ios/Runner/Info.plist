@@ -61,6 +61,9 @@
     <string>Ứng dụng cần truy cập vị trí để theo dõi tốc độ và phát hiện trạng thái lái xe</string>
     <key>NSLocationAlwaysUsageDescription</key>
     <string>Ứng dụng cần truy cập vị trí ngay cả khi ở chế độ nền để theo dõi trạng thái lái xe</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Ứng dụng cần truy cập microphone để phát hiện cuộc gọi Zalo/Facebook và cảnh báo an toàn khi lái xe</string>
+    
     
     <key>UIBackgroundModes</key>
     <array>

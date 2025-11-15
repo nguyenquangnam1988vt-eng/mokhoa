@@ -25,7 +25,12 @@ class MonitorEvent {
   
   // 🎯 CÁC TRƯỜNG CHO NETWORK DETECTION
   final bool? isActiveBrowsing;
-  final String? activityType; // 🆚 THÊM TRƯỜNG MỚI CHO REAL NETWORK DETECTION
+  final String? activityType;
+  
+  // 📞 THÊM TRƯỜNG CHO CALL DETECTION
+  final bool? isInCall;
+  final String? callState;
+  final double? callDuration;
 
   MonitorEvent({
     required this.type,
@@ -39,7 +44,10 @@ class MonitorEvent {
     this.zStability,
     required this.timestamp,
     this.isActiveBrowsing,
-    this.activityType, // 🆚 THÊM TRƯỜNG MỚI
+    this.activityType,
+    this.isInCall,        // 📞 THÊM
+    this.callState,       // 📞 THÊM  
+    this.callDuration,    // 📞 THÊM
   });
 
   factory MonitorEvent.fromJson(Map<String, dynamic> json) {
@@ -55,7 +63,10 @@ class MonitorEvent {
       zStability: json['zStability'] as double?,
       timestamp: DateTime.fromMillisecondsSinceEpoch(json['timestamp'] as int),
       isActiveBrowsing: json['isActiveBrowsing'] as bool?,
-      activityType: json['activityType'] as String?, // 🆚 THÊM TRƯỜNG MỚI
+      activityType: json['activityType'] as String?,
+      isInCall: json['isInCall'] as bool?,           // 📞 THÊM
+      callState: json['callState'] as String?,       // 📞 THÊM
+      callDuration: json['callDuration'] as double?, // 📞 THÊM
     );
   }
 }
@@ -95,7 +106,11 @@ class _MonitorScreenState extends State<MonitorScreen> {
   bool _isDriving = false;
   bool _isNetworkActive = false;
   bool _isActiveBrowsing = false;
-  String _activityType = ""; // 🆚 THÊM BIẾN MỚI CHO ACTIVITY TYPE
+  String _activityType = "";
+  
+  // 📞 THÊM BIẾN CHO CALL DETECTION
+  bool _isInCall = false;
+  double _callDuration = 0.0;
 
   // 🎯 Lưu trữ lịch sử tilt để tính trung bình 3s
   final List<double> _tiltHistory = [];
@@ -164,7 +179,14 @@ class _MonitorScreenState extends State<MonitorScreen> {
         final Map<String, dynamic> data = jsonDecode(event as String);
         final monitorEvent = MonitorEvent.fromJson(data);
 
-        if (monitorEvent.type == 'TILT_EVENT') {
+        // 📞 XỬ LÝ SỰ KIỆN CUỘC GỌI
+        if (monitorEvent.type == 'CALL_EVENT') {
+          _isInCall = monitorEvent.isInCall ?? false;
+          _callDuration = monitorEvent.callDuration ?? 0.0;
+          _historyEvents.insert(0, monitorEvent);
+          print("📞 Call Event: ${monitorEvent.message}");
+        }
+        else if (monitorEvent.type == 'TILT_EVENT') {
           _latestTiltEvent = monitorEvent;
           if (monitorEvent.tiltPercent != null) {
             _updateTiltAverage(monitorEvent.tiltPercent!);
@@ -172,6 +194,10 @@ class _MonitorScreenState extends State<MonitorScreen> {
           // 🎯 Cập nhật trạng thái web browsing
           if (monitorEvent.isActiveBrowsing != null) {
             _isActiveBrowsing = monitorEvent.isActiveBrowsing!;
+          }
+          // 📞 Cập nhật trạng thái call từ tilt event
+          if (monitorEvent.isInCall != null) {
+            _isInCall = monitorEvent.isInCall!;
           }
         } 
         else if (monitorEvent.type == 'DANGER_EVENT') {
@@ -198,7 +224,11 @@ class _MonitorScreenState extends State<MonitorScreen> {
           _currentSpeed = monitorEvent.speed ?? 0.0;
           _isDriving = monitorEvent.isDriving ?? false;
           _historyEvents.insert(0, monitorEvent);
-        } 
+        }
+        else if (monitorEvent.type == 'SPEED_UPDATE') {
+          _currentSpeed = monitorEvent.speed ?? 0.0;
+          _isDriving = monitorEvent.isDriving ?? false;
+        }
         else {
           _historyEvents.insert(0, monitorEvent);
         }
@@ -269,6 +299,75 @@ class _MonitorScreenState extends State<MonitorScreen> {
                 'Tilt: ${_latestDangerEvent!.tiltPercent!.toStringAsFixed(1)}% | Web: ${_isActiveBrowsing ? "Đang lướt" : "Không lướt"}${_activityType.isNotEmpty ? " • $_activityType" : ""}',
                 style: const TextStyle(color: Colors.white70, fontSize: 12),
               ),
+            if (_latestDangerEvent!.isInCall == true)
+              Text(
+                '📞 Đang nghe điện thoại: ${_callDuration.toStringAsFixed(0)} giây',
+                style: const TextStyle(color: Colors.yellow, fontSize: 12, fontWeight: FontWeight.bold),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // 📞 THÊM CARD HIỂN THỊ TRẠNG THÁI CUỘC GỌI
+  Widget _buildCallStatusCard() {
+    return Card(
+      elevation: 4,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      color: _isInCall ? Colors.red.shade900 : Colors.green.shade900,
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  _isInCall ? Icons.phone_in_talk : Icons.phone_disabled,
+                  color: Colors.white,
+                  size: 30,
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  _isInCall ? 'ĐANG TRONG CUỘC GỌI' : 'KHÔNG CÓ CUỘC GỌI',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+              ],
+            ),
+            if (_isInCall) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Thời gian gọi: ${_callDuration.toStringAsFixed(0)} giây',
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'CẢNH BÁO: Không nghe điện thoại khi đang lái xe',
+                style: const TextStyle(
+                  fontSize: 14,
+                  color: Colors.yellow,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ] else ...[
+              const SizedBox(height: 8),
+              Text(
+                'An toàn - không có cuộc gọi nào',
+                style: const TextStyle(
+                  fontSize: 14,
+                  color: Colors.white70,
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -322,6 +421,33 @@ class _MonitorScreenState extends State<MonitorScreen> {
                 color: Colors.white70,
               ),
             ),
+            if (_isDriving && _isInCall) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.red.withOpacity(0.3),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.red, width: 1),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.warning, color: Colors.yellow, size: 20),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'NGUY HIỂM: Đang lái xe và nghe điện thoại!',
+                        style: TextStyle(
+                          color: Colors.yellow,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -438,28 +564,55 @@ class _MonitorScreenState extends State<MonitorScreen> {
                       _buildNetworkInfoItem('Web:', 
                           _isActiveBrowsing ? "🌐 Đang lướt web" : "💤 Không lướt web",
                           _isActiveBrowsing ? Colors.blue.shade400 : Colors.grey.shade400),
+                      _buildNetworkInfoItem('Cuộc gọi:', 
+                          _isInCall ? "📞 Đang gọi" : "📵 Không gọi",
+                          _isInCall ? Colors.red.shade400 : Colors.green.shade400),
                     ],
                   ),
                 ),
                 // 🎯 HIỂN THỊ TRẠNG THÁI REAL-TIME DETECTION
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: _isActiveBrowsing ? Colors.blue.withOpacity(0.2) : Colors.green.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: _isActiveBrowsing ? Colors.blue : Colors.green,
-                      width: 1,
+                Column(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: _isActiveBrowsing ? Colors.blue.withOpacity(0.2) : Colors.green.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: _isActiveBrowsing ? Colors.blue : Colors.green,
+                          width: 1,
+                        ),
+                      ),
+                      child: Text(
+                        _isActiveBrowsing ? 'WEB' : 'NO WEB',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: _isActiveBrowsing ? Colors.blue : Colors.green,
+                        ),
+                      ),
                     ),
-                  ),
-                  child: Text(
-                    _isActiveBrowsing ? 'PHÁT HIỆN' : 'AN TOÀN',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      color: _isActiveBrowsing ? Colors.blue : Colors.green,
+                    SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: _isInCall ? Colors.red.withOpacity(0.2) : Colors.green.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: _isInCall ? Colors.red : Colors.green,
+                          width: 1,
+                        ),
+                      ),
+                      child: Text(
+                        _isInCall ? 'CALL' : 'NO CALL',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: _isInCall ? Colors.red : Colors.green,
+                        ),
+                      ),
                     ),
-                  ),
+                  ],
                 ),
               ],
             ),
@@ -599,6 +752,36 @@ class _MonitorScreenState extends State<MonitorScreen> {
               ],
             ),
           ),
+
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            decoration: BoxDecoration(
+              color: _isInCall ? Colors.red.withOpacity(0.2) : Colors.grey.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: _isInCall ? Colors.red : Colors.grey,
+                width: 1,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  _isInCall ? Icons.phone : Icons.phone_disabled,
+                  color: _isInCall ? Colors.red : Colors.grey,
+                  size: 16,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  _isInCall ? 'CALL' : 'NO CALL',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: _isInCall ? Colors.red : Colors.grey,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -631,6 +814,9 @@ class _MonitorScreenState extends State<MonitorScreen> {
         if (event.isActiveBrowsing != null) {
           subtitle += '\nWeb: ${event.isActiveBrowsing! ? "Đang lướt" : "Không lướt"}';
         }
+        if (event.isInCall == true) {
+          subtitle += '\n📞 Đang nghe điện thoại';
+        }
         break;
       
       case 'DRIVING_STATUS':
@@ -659,6 +845,16 @@ class _MonitorScreenState extends State<MonitorScreen> {
         eventColor = event.isActiveBrowsing == true ? Colors.purple.shade400 : Colors.grey.shade400;
         icon = event.isActiveBrowsing == true ? Icons.network_ping : Icons.network_wifi;
         subtitle += '\nPhát hiện thực tế: ${event.activityType ?? "Không xác định"}';
+        break;
+
+      // 📞 CASE MỚI: Call Event
+      case 'CALL_EVENT':
+        eventColor = event.isInCall == true ? Colors.red.shade400 : Colors.green.shade400;
+        icon = event.isInCall == true ? Icons.phone_in_talk : Icons.phone_disabled;
+        subtitle += '\nTrạng thái: ${event.isInCall! ? "Đang gọi" : "Không gọi"}';
+        if (event.callDuration != null) {
+          subtitle += '\nThời gian: ${event.callDuration!.toStringAsFixed(0)}s';
+        }
         break;
       
       case 'LOCATION_UPDATE':
@@ -714,7 +910,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(vertical: 4.0),
                 child: Text(
-                  'Kết nối: $_connectionStatus | Tilt: ${_averageTiltPercent.toStringAsFixed(1)}% | Tốc độ: ${_currentSpeed.toStringAsFixed(1)} km/h | Web: ${_isActiveBrowsing ? "Đang lướt" : "Không lướt"}${_activityType.isNotEmpty ? " • $_activityType" : ""}',
+                  'Kết nối: $_connectionStatus | Tilt: ${_averageTiltPercent.toStringAsFixed(1)}% | Tốc độ: ${_currentSpeed.toStringAsFixed(1)} km/h | Web: ${_isActiveBrowsing ? "Đang lướt" : "Không lướt"} | Call: ${_isInCall ? "Đang gọi" : "Không gọi"}${_activityType.isNotEmpty ? " • $_activityType" : ""}',
                   textAlign: TextAlign.center,
                   style: const TextStyle(fontSize: 12, color: Colors.white70),
                 ),
@@ -729,6 +925,12 @@ class _MonitorScreenState extends State<MonitorScreen> {
             child: Padding(
               padding: const EdgeInsets.all(12.0),
               child: _buildDangerAlertCard(),
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.all(12.0),
+              child: _buildCallStatusCard(), // 📞 THÊM CARD CALL STATUS
             ),
           ),
           SliverToBoxAdapter(
