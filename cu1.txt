@@ -1,1203 +1,1204 @@
-import CoreLocation
-import CoreMotion
-import UIKit
-import UserNotifications
-import Flutter
-import Network
-import SystemConfiguration
-import CoreTelephony
-import AVFoundation
+// lib/main.dart
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'dart:async';
+import 'dart:convert';
+import 'dart:math';
 
-// 🎯 CLASS CALL DETECTOR CHO CUỘC GỌI DI ĐỘNG
-class CallDetectorManager: NSObject {
-    private let callCenter = CTCallCenter()
-    private var isInCall = false
-    private var callStartTime: Date?
-    
-    var onCallStateChanged: ((Bool, String) -> Void)?
-    
-    func startMonitoring() {
-        callCenter.callEventHandler = { [weak self] call in
-            DispatchQueue.main.async {
-                self?.handleCallEvent(call: call)
-            }
-        }
-    }
-    
-    private func handleCallEvent(call: CTCall) {
-        let previousCallState = isInCall
-        
-        switch call.callState {
-        case CTCallStateIncoming:
-            print("📞 CUỘC GỌI ĐẾN: \(call.callID ?? "Unknown")")
-            // Chưa set isInCall = true vì chưa nhấc máy
-            
-        case CTCallStateConnected:
-            print("📞 ĐÃ NHẤC MÁY - BẮT ĐẦU CUỘC GỌI")
-            isInCall = true
-            callStartTime = Date()
-            onCallStateChanged?(true, "connected")
-            
-        case CTCallStateDisconnected:
-            print("📞 ĐÃ KẾT THÚC CUỘC GỌI")
-            isInCall = false
-            callStartTime = nil
-            onCallStateChanged?(false, "disconnected")
-            
-        default:
-            break
-        }
-        
-        print("📞 Call State: \(call.callState) - isInCall: \(isInCall)")
-    }
-    
-    func isCurrentlyInCall() -> Bool {
-        return isInCall
-    }
-    
-    func getCallDuration() -> TimeInterval? {
-        guard let startTime = callStartTime else { return nil }
-        return Date().timeIntervalSince(startTime)
-    }
+void main() {
+  runApp(const MyApp());
 }
 
-// 🎯 CLASS VOIP CALL DETECTOR CHO ZALO/FACEBOOK
-class VoIPCallDetector: NSObject {
-    private let audioSession = AVAudioSession.sharedInstance()
-    private var isInVoIPCall = false
-    private var voipCallStartTime: Date?
-    private var lastAudioRoute: String = ""
-    
-    var onVoIPCallStateChanged: ((Bool, String) -> Void)?
-    
-    func startMonitoring() {
-        // Lắng nghe thay đổi audio route
-        NotificationCenter.default.addObserver(self,
-            selector: #selector(audioRouteChanged),
-            name: AVAudioSession.routeChangeNotification,
-            object: nil)
-        
-        // Lắng nghe thay đổi audio session
-        NotificationCenter.default.addObserver(self,
-            selector: #selector(audioSessionInterrupted),
-            name: AVAudioSession.interruptionNotification,
-            object: nil)
-        
-        print("📱 VoIP Call Detector started")
-    }
-    
-    func stopMonitoring() {
-        NotificationCenter.default.removeObserver(self)
-    }
-    
-    @objc private func audioRouteChanged(notification: Notification) {
-        DispatchQueue.main.async {
-            self.checkCurrentAudioState()
-        }
-    }
-    
-    @objc private func audioSessionInterrupted(notification: Notification) {
-        guard let userInfo = notification.userInfo,
-              let interruptionType = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt else { return }
-        
-        DispatchQueue.main.async {
-            if interruptionType == AVAudioSession.InterruptionType.began.rawValue {
-                // Cuộc gọi bắt đầu
-                self.handleVoIPCallStarted()
-            } else if interruptionType == AVAudioSession.InterruptionType.ended.rawValue {
-                // Cuộc gọi kết thúc
-                self.handleVoIPCallEnded()
-            }
-        }
-    }
-    
-    private func checkCurrentAudioState() {
-        let currentRoute = audioSession.currentRoute
-        
-        // 🎯 PHÁT HIỆN CUỘC GỌI VoIP DỰA TRÊN AUDIO ROUTE
-        let isLikelyInVoIPCall = isAudioRouteIndicatingCall(currentRoute)
-        
-        if isLikelyInVoIPCall && !isInVoIPCall {
-            handleVoIPCallStarted()
-        } else if !isLikelyInVoIPCall && isInVoIPCall {
-            handleVoIPCallEnded()
-        }
-        
-        lastAudioRoute = describeAudioRoute(currentRoute)
-    }
-    
-    private func isAudioRouteIndicatingCall(_ route: AVAudioSessionRouteDescription) -> Bool {
-        // Kiểm tra xem audio route có chỉ ra đang trong cuộc gọi không
-        let hasMicrophone = route.inputs.contains { $0.portType == .builtInMic }
-        let hasReceiver = route.outputs.contains { $0.portType == .builtInReceiver }
-        let hasSpeaker = route.outputs.contains { $0.portType == .builtInSpeaker }
-        let hasHeadphones = route.outputs.contains { $0.portType == .headphones }
-        
-        // 🎯 CÁC TÌNH HUỐNG CHO THẤY ĐANG TRONG CUỘC GỌI VOIP:
-        // 1. Có mic + receiver (áp tai nghe) - Zalo/Facebook call
-        // 2. Có mic + speaker (loa ngoài) - Zalo/Facebook call loa ngoài
-        // 3. Có mic + headphones (tai nghe) - Zalo/Facebook call tai nghe
-        let isInCall = hasMicrophone && (hasReceiver || hasSpeaker || hasHeadphones)
-        
-        print("🎧 VoIP Audio Route - Mic: \(hasMicrophone), Receiver: \(hasReceiver), Speaker: \(hasSpeaker) -> InCall: \(isInCall)")
-        return isInCall
-    }
-    
-    private func handleVoIPCallStarted() {
-        isInVoIPCall = true
-        voipCallStartTime = Date()
-        
-        let callType = determineCallType()
-        onVoIPCallStateChanged?(true, callType)
-        
-        print("📱 VoIP Call STARTED: \(callType)")
-    }
-    
-    private func handleVoIPCallEnded() {
-        isInVoIPCall = false
-        voipCallStartTime = nil
-        onVoIPCallStateChanged?(false, "ended")
-        
-        print("📱 VoIP Call ENDED")
-    }
-    
-    private func determineCallType() -> String {
-        let currentRoute = audioSession.currentRoute
-        
-        if currentRoute.outputs.contains(where: { $0.portType == .builtInReceiver }) {
-            return "voip_ear" // Gọi áp tai
-        } else if currentRoute.outputs.contains(where: { $0.portType == .builtInSpeaker }) {
-            return "voip_speaker" // Gọi loa ngoài
-        } else if currentRoute.outputs.contains(where: { $0.portType == .headphones }) {
-            return "voip_headphones" // Gọi tai nghe
-        } else {
-            return "voip_unknown"
-        }
-    }
-    
-    private func describeAudioRoute(_ route: AVAudioSessionRouteDescription) -> String {
-        let inputs = route.inputs.map { $0.portType.rawValue }.joined(separator: ", ")
-        let outputs = route.outputs.map { $0.portType.rawValue }.joined(separator: ", ")
-        return "Inputs: [\(inputs)], Outputs: [\(outputs)]"
-    }
-    
-    func isCurrentlyInVoIPCall() -> Bool {
-        return isInVoIPCall
-    }
-    
-    func getVoIPCallDuration() -> TimeInterval? {
-        guard let startTime = voipCallStartTime else { return nil }
-        return Date().timeIntervalSince(startTime)
-    }
+const EventChannel _eventChannel = EventChannel(
+  'com.example.app/monitor_events',
+);
+
+class MonitorEvent {
+  final String type;
+  final String message;
+  final String? location;
+  final double? tiltValue;
+  final double? tiltPercent;
+  final double? speed;
+  final bool? isDriving;
+  final bool? isNetworkActive;
+  final double? zStability;
+  final DateTime timestamp;
+
+  // 🎯 CÁC TRƯỜNG CHO NETWORK DETECTION
+  final bool? isActiveBrowsing;
+  final String? activityType;
+
+  // 📞 THÊM TRƯỜNG CHO CALL DETECTION
+  final bool? isInCall;
+  final String? callState;
+  final double? callDuration;
+
+  // 📞 THÊM TRƯỜNG CHO VOIP CALL DETECTION
+  final bool? isVoIPCall;
+  final String? callType;
+
+  MonitorEvent({
+    required this.type,
+    required this.message,
+    this.location,
+    this.tiltValue,
+    this.tiltPercent,
+    this.speed,
+    this.isDriving,
+    this.isNetworkActive,
+    this.zStability,
+    required this.timestamp,
+    this.isActiveBrowsing,
+    this.activityType,
+    this.isInCall,
+    this.callState,
+    this.callDuration,
+    this.isVoIPCall,
+    this.callType,
+  });
+
+  factory MonitorEvent.fromJson(Map<String, dynamic> json) {
+    return MonitorEvent(
+      type: json['type'] as String,
+      message: json['message'] as String,
+      location: json['location'] as String?,
+      tiltValue: json['tiltValue'] as double?,
+      tiltPercent: json['tiltPercent'] as double?,
+      speed: json['speed'] as double?,
+      isDriving: json['isDriving'] as bool?,
+      isNetworkActive: json['isNetworkActive'] as bool?,
+      zStability: json['zStability'] as double?,
+      timestamp: DateTime.fromMillisecondsSinceEpoch(json['timestamp'] as int),
+      isActiveBrowsing: json['isActiveBrowsing'] as bool?,
+      activityType: json['activityType'] as String?,
+      isInCall: json['isInCall'] as bool?,
+      callState: json['callState'] as String?,
+      callDuration: json['callDuration'] as double?,
+      isVoIPCall: json['isVoIPCall'] as bool?,
+      callType: json['callType'] as String?,
+    );
+  }
 }
 
-@objcMembers
-class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
-    
-    private var locationManager: CLLocationManager?
-    private var motionManager: CMMotionManager?
-    private var networkMonitor: NWPathMonitor?
-    private var eventSink: FlutterEventSink?
-    private var isDeviceUnlocked = false
-    private var currentSpeed: Double = 0.0
-    private var isDriving = false
-    private var isNetworkActive = false
-    private var lastDangerAlertTime: Date?
-    
-    // 🎯 NETWORK DETECTION THÔNG MINH
-    private var networkCongestionDetector: NetworkCongestionDetector?
-    private var realNetworkMonitor: RealNetworkMonitor?
-    private var isActiveBrowsing = false
-    
-    // 🎯 CẢI THIỆN TỐC ĐỘ - CẬP NHẬT THƯỜNG XUYÊN
-    private var lastValidLocation: CLLocation?
-    private var speedUpdateTimer: Timer?
-    private var lastSpeedUpdateTime: Date = Date()
-    
-    // 🎯 THÊM CALL DETECTION
-    private var callDetector: CallDetectorManager?
-    private var isInCall = false
-    private var callStartTime: Date?
-    private var lastCallAlertTime: Date?
-    private let callAlertCooldown: TimeInterval = 10.0 // 10 giây giữa các cảnh báo call
-    
-    // 📞 THÊM VOIP DETECTION
-    private var voipCallDetector: VoIPCallDetector?
-    private var isInVoIPCall = false
-    private var voipCallStartTime: Date?
-    private var lastVoIPAlertTime: Date?
-    private let voipAlertCooldown: TimeInterval = 10.0 // 10 giây giữa các cảnh báo VoIP
-    
-    // Ngưỡng
-    private let drivingSpeedThreshold: Double = 10.0 // km/h
-    private let viewingPhoneThreshold: Double = 80.0
-    private let intermediateThreshold: Double = 90.0
-    private let dangerAlertCooldown: TimeInterval = 5.0
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
 
-    // Biến theo dõi độ ổn định trục Z
-    private var zAccelerationHistory: [Double] = []
-    private let zStabilityBufferSize = 50
-    private var zStability: Double = 0.0
-    
-    static let shared = UnlockMonitor()
-    
-    override init() {
-        super.init()
-        setupNetworkMonitoring()
-        setupNetworkCongestionDetection()
-        setupRealNetworkMonitoring()
-        setupSpeedUpdateTimer()
-        setupCallDetection()
-        setupVoIPDetection() // 🎯 THÊM DÒNG NÀY
-    }
-    
-    // MARK: - FlutterStreamHandler Methods
-    
-    public func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
-        self.eventSink = events
-        print("Flutter EventChannel đã kết nối")
-        return nil
-    }
-    
-    public func onCancel(withArguments arguments: Any?) -> FlutterError? {
-        eventSink = nil
-        speedUpdateTimer?.invalidate()
-        print("Flutter EventChannel đã ngắt kết nối")
-        return nil
-    }
-    
-    // MARK: - Monitoring Control
-    
-    func startMonitoring() {
-        setupLocationMonitoring()
-        setupTiltMonitoring()
-        setupLockUnlockObservers()
-        networkCongestionDetector?.startMonitoring()
-        realNetworkMonitor?.startMonitoring()
-        callDetector?.startMonitoring()
-        voipCallDetector?.startMonitoring() // 🎯 THÊM DÒNG NÀY
-        
-        print("Unlock Monitor: Đã đăng ký và bắt đầu theo dõi (bao gồm call + VoIP detection).")
-    }
-    
-    func stopMonitoring() {
-        motionManager?.stopAccelerometerUpdates()
-        locationManager?.stopUpdatingLocation()
-        networkMonitor?.cancel()
-        networkCongestionDetector?.stopMonitoring()
-        realNetworkMonitor?.stopMonitoring()
-        callDetector = nil
-        voipCallDetector?.stopMonitoring() // 🎯 THÊM DÒNG NÀY
-        voipCallDetector = nil
-        speedUpdateTimer?.invalidate()
-        NotificationCenter.default.removeObserver(self)
-    }
-    
-    // 🎯 THÊM PHƯƠNG THỨC VOIP DETECTION
-    private func setupVoIPDetection() {
-        voipCallDetector = VoIPCallDetector()
-        voipCallDetector?.onVoIPCallStateChanged = { [weak self] isInCall, callType in
-            guard let self = self else { return }
-            
-            let wasInVoIPCall = self.isInVoIPCall
-            self.isInVoIPCall = isInCall
-            
-            if isInCall {
-                self.voipCallStartTime = Date()
-            } else {
-                self.voipCallStartTime = nil
-            }
-            
-            // Gửi sự kiện VoIP call state tới Flutter
-            let callTime = Date()
-            let callData: [String: Any] = [
-                "type": "VOIP_CALL_EVENT",
-                "message": isInCall ? "Đang trong cuộc gọi Zalo/Facebook (\(callType))" : "Đã kết thúc cuộc gọi Zalo/Facebook",
-                "isInCall": isInCall,
-                "isVoIPCall": true,
-                "callType": callType,
-                "callDuration": self.voipCallDetector?.getVoIPCallDuration() ?? 0,
-                "timestamp": Int(callTime.timeIntervalSince1970 * 1000)
-            ]
-            
-            self.sendEventToFlutter(callData)
-            print("📱 VoIP Call State: \(isInCall ? "ACTIVE" : "ENDED") - Type: \(callType)")
-            
-            // 🚨 KIỂM TRA CẢNH BÁO NẾU ĐANG LÁI XE
-            if isInCall && self.isDriving && !wasInVoIPCall {
-                self.checkVoIPCallWhileDrivingAlert(callType: callType)
-            }
-        }
-        
-        voipCallDetector?.startMonitoring()
-    }
-    
-    // 🎯 THÊM PHƯƠNG THỨC CALL DETECTION
-    private func setupCallDetection() {
-        callDetector = CallDetectorManager()
-        callDetector?.onCallStateChanged = { [weak self] isInCall, state in
-            guard let self = self else { return }
-            
-            let wasInCall = self.isInCall
-            self.isInCall = isInCall
-            
-            if isInCall {
-                self.callStartTime = Date()
-            } else {
-                self.callStartTime = nil
-            }
-            
-            // Gửi sự kiện call state tới Flutter
-            let callTime = Date()
-            let callData: [String: Any] = [
-                "type": "CALL_EVENT",
-                "message": isInCall ? "Đang trong cuộc gọi điện thoại" : "Đã kết thúc cuộc gọi",
-                "isInCall": isInCall,
-                "callState": state,
-                "callDuration": self.getCallDuration() ?? 0,
-                "timestamp": Int(callTime.timeIntervalSince1970 * 1000)
-            ]
-            
-            self.sendEventToFlutter(callData)
-            print("📞 Call State Changed: \(isInCall ? "IN_CALL" : "END_CALL") - State: \(state)")
-            
-            // 🚨 KIỂM TRA CẢNH BÁO NẾU ĐANG LÁI XE VÀ BẮT ĐẦU CUỘC GỌI
-            if isInCall && self.isDriving && !wasInCall {
-                self.checkCallWhileDrivingAlert()
-            }
-        }
-        
-        callDetector?.startMonitoring()
-    }
-    
-    private func getCallDuration() -> TimeInterval? {
-        guard let startTime = callStartTime else { return nil }
-        return Date().timeIntervalSince(startTime)
-    }
-    
-    // 🎯 TIMER CẬP NHẬT TỐC ĐỘ THƯỜNG XUYÊN
-    private func setupSpeedUpdateTimer() {
-        speedUpdateTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            self?.sendSpeedUpdate()
-        }
-        RunLoop.current.add(speedUpdateTimer!, forMode: .common)
-    }
-    
-    private func sendSpeedUpdate() {
-        let speedData: [String: Any] = [
-            "type": "SPEED_UPDATE",
-            "speed": currentSpeed,
-            "isDriving": isDriving,
-            "timestamp": Int(Date().timeIntervalSince1970 * 1000)
-        ]
-        self.sendEventToFlutter(speedData)
-    }
-    
-    // 🎯 THÊM HÀM KIỂM TRA CẢNH BÁO KHI NGHE ĐIỆN THOẠI LÁI XE
-    private func checkCallWhileDrivingAlert() {
-        guard canSendCallAlert() else { return }
-        
-        let dangerTime = Date()
-        lastCallAlertTime = dangerTime
-        
-        let dangerData: [String: Any] = [
-            "type": "DANGER_EVENT",
-            "message": "CẢNH BÁO NGUY HIỂM: Đang lái xe và NGHE ĐIỆN THOẠI!",
-            "speed": currentSpeed,
-            "isInCall": true,
-            "callDuration": getCallDuration() ?? 0,
-            "timestamp": Int(dangerTime.timeIntervalSince1970 * 1000)
-        ]
-        
-        self.sendEventToFlutter(dangerData)
-        self.sendCriticalNotification(
-            title: "CẢNH BÁO NGUY HIỂM!",
-            message: "Đang lái xe ở \(String(format: "%.1f", currentSpeed)) km/h và NGHE ĐIỆN THOẠI!"
-        )
-        
-        print("🚨 CALL DANGER ALERT: Driving + Phone Call! Speed: \(currentSpeed) km/h")
-    }
-    
-    // 🎯 THÊM HÀM CẢNH BÁO CHO VOIP CALL
-    private func checkVoIPCallWhileDrivingAlert(callType: String) {
-        guard canSendVoIPAlert() else { return }
-        
-        let dangerTime = Date()
-        lastVoIPAlertTime = dangerTime
-        
-        let appName = getAppNameFromCallType(callType)
-        let callDuration = voipCallDetector?.getVoIPCallDuration() ?? 0
-        
-        let dangerData: [String: Any] = [
-            "type": "DANGER_EVENT",
-            "message": "CẢNH BÁO NGUY HIỂM: Đang lái xe và GỌI \(appName)!",
-            "speed": currentSpeed,
-            "isInCall": true,
-            "isVoIPCall": true,
-            "callType": callType,
-            "callDuration": callDuration,
-            "timestamp": Int(dangerTime.timeIntervalSince1970 * 1000)
-        ]
-        
-        self.sendEventToFlutter(dangerData)
-        self.sendCriticalNotification(
-            title: "CẢNH BÁO NGUY HIỂM!",
-            message: "Đang lái xe ở \(String(format: "%.1f", currentSpeed)) km/h và GỌI \(appName)!"
-        )
-        
-        print("🚨 VOIP CALL DANGER ALERT: Driving + \(appName) Call! Speed: \(currentSpeed) km/h, Duration: \(callDuration)s")
-    }
-    
-    private func canSendCallAlert() -> Bool {
-        guard let lastAlert = lastCallAlertTime else { return true }
-        return Date().timeIntervalSince(lastAlert) >= callAlertCooldown
-    }
-    
-    private func canSendVoIPAlert() -> Bool {
-        guard let lastAlert = lastVoIPAlertTime else { return true }
-        return Date().timeIntervalSince(lastAlert) >= voipAlertCooldown
-    }
-    
-    private func getAppNameFromCallType(_ callType: String) -> String {
-        return "ZALO/FACEBOOK"
-    }
-    
-    // 🎯 REAL NETWORK MONITORING THÔNG MINH
-    private func setupRealNetworkMonitoring() {
-        realNetworkMonitor = RealNetworkMonitor()
-        realNetworkMonitor?.onNetworkActivityDetected = { [weak self] isActive, activityType in
-            guard let self = self else { return }
-            
-            let wasBrowsing = self.isActiveBrowsing
-            self.isActiveBrowsing = isActive
-            
-            if wasBrowsing != isActive {
-                let analysisTime = Date()
-                let analysisData: [String: Any] = [
-                    "type": "REAL_NETWORK_ANALYSIS",
-                    "message": isActive ? "Đang có hoạt động web thực tế (\(activityType))" : "Không có hoạt động web",
-                    "isActiveBrowsing": isActive,
-                    "activityType": activityType,
-                    "timestamp": Int(analysisTime.timeIntervalSince1970 * 1000)
-                ]
-                
-                self.sendEventToFlutter(analysisData)
-                print("🌐 Real Network Detection: \(isActive ? "ACTIVE - \(activityType)" : "INACTIVE")")
-            }
-        }
-    }
-    
-    private func setupNetworkCongestionDetection() {
-        networkCongestionDetector = NetworkCongestionDetector()
-        networkCongestionDetector?.onNetworkStatusUpdate = { [weak self] isBrowsing in
-            guard let self = self else { return }
-            
-            if !self.isActiveBrowsing {
-                let wasBrowsing = self.isActiveBrowsing
-                self.isActiveBrowsing = isBrowsing
-                
-                if wasBrowsing != isBrowsing {
-                    let analysisTime = Date()
-                    let analysisData: [String: Any] = [
-                        "type": "NETWORK_ANALYSIS",
-                        "message": isBrowsing ? "Đang có hoạt động lướt web" : "Không có hoạt động web",
-                        "isActiveBrowsing": isBrowsing,
-                        "timestamp": Int(analysisTime.timeIntervalSince1970 * 1000)
-                    ]
-                    
-                    self.sendEventToFlutter(analysisData)
-                    print("📊 Network Analysis: Browsing: \(isBrowsing)")
-                }
-            }
-        }
-    }
-    
-    // MARK: - Network Monitoring
-    
-    private func setupNetworkMonitoring() {
-        networkMonitor = NWPathMonitor()
-        let queue = DispatchQueue(label: "NetworkMonitor")
-        
-        networkMonitor?.pathUpdateHandler = { [weak self] path in
-            guard let self = self else { return }
-            
-            let wasNetworkActive = self.isNetworkActive
-            self.isNetworkActive = (path.status == .satisfied)
-            
-            if wasNetworkActive != self.isNetworkActive {
-                let networkTime = Date()
-                let networkData: [String: Any] = [
-                    "type": "NETWORK_STATUS",
-                    "message": self.isNetworkActive ? "Đã kết nối Internet" : "Mất kết nối Internet",
-                    "isNetworkActive": self.isNetworkActive,
-                    "timestamp": Int(networkTime.timeIntervalSince1970 * 1000)
-                ]
-                
-                self.sendEventToFlutter(networkData)
-                print("🌐 Network Status: \(self.isNetworkActive ? "ACTIVE" : "INACTIVE")")
-            }
-        }
-        
-        networkMonitor?.start(queue: queue)
-    }
-    
-    // MARK: - Location Monitoring - CẢI THIỆN ĐỘ CHÍNH XÁC
-    
-    private func setupLocationMonitoring() {
-        if locationManager == nil {
-            let manager = CLLocationManager()
-            manager.delegate = self
-            
-            // 🎯 SỬ DỤNG GPS ĐỘ CHÍNH XÁC CAO
-            manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
-            manager.distanceFilter = 2.0 // Giảm để cập nhật thường xuyên hơn
-            manager.activityType = .automotiveNavigation
-            manager.allowsBackgroundLocationUpdates = true
-            manager.pausesLocationUpdatesAutomatically = false
-            
-            locationManager = manager
-        }
-        
-        locationManager?.requestAlwaysAuthorization()
-        
-        let status = CLLocationManager.authorizationStatus()
-        print("📍 Location Authorization Status: \(status.rawValue)")
-        
-        if status == .authorizedAlways || status == .authorizedWhenInUse {
-            locationManager?.startUpdatingLocation()
-            print("📍 Đã bắt đầu cập nhật vị trí với độ chính xác cao")
-        } else {
-            print("📍 Chưa có quyền truy cập vị trí")
-        }
-    }
-    
-    // MARK: - CLLocationManagerDelegate - TÍNH TỐC ĐỘ CHUẨN
-    
-    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard let location = locations.last else { return }
-        
-        // 🎯 KIỂM TRA ĐỘ CHÍNH XÁC CỦA LOCATION
-        guard location.horizontalAccuracy >= 0 && location.horizontalAccuracy <= 50.0 else {
-            print("📍 Bỏ qua location - độ chính xác kém: \(location.horizontalAccuracy)m")
-            return
-        }
-        
-        // 🎯 TÍNH TỐC ĐỘ CHUẨN
-        let calculatedSpeed = calculateAccurateSpeed(currentLocation: location)
-        
-        updateDrivingStatus(speed: calculatedSpeed)
-        
-        // 🎯 THÔNG BÁO CHO NETWORK MONITORS
-        realNetworkMonitor?.notifyLocationUpdate()
-        networkCongestionDetector?.setLocationUpdateCooldown()
-        
-        let locationData: [String: Any] = [
-            "type": "LOCATION_UPDATE",
-            "latitude": location.coordinate.latitude,
-            "longitude": location.coordinate.longitude,
-            "speed": currentSpeed,
-            "accuracy": location.horizontalAccuracy,
-            "isDriving": isDriving,
-            "timestamp": Int(location.timestamp.timeIntervalSince1970 * 1000)
-        ]
-        
-        self.sendEventToFlutter(locationData)
-        lastSpeedUpdateTime = Date()
-    }
-    
-    // 🎯 TÍNH TỐC ĐỘ CHUẨN - ƯU TIÊN HỆ THỐNG
-    private func calculateAccurateSpeed(currentLocation: CLLocation) -> Double {
-        // 🎯 PHƯƠNG PHÁP 1: Sử dụng tốc độ từ hệ thống (ưu tiên)
-        let systemSpeed = currentLocation.speed
-        
-        // 🎯 KIỂM TRA TÍNH HỢP LỆ CỦA TỐC ĐỘ HỆ THỐNG
-        if systemSpeed >= 0 && systemSpeed < 50.0 {
-            // Tốc độ hệ thống hợp lệ, sử dụng trực tiếp
-            print("🎯 Using system speed: \(systemSpeed * 3.6) km/h")
-            return systemSpeed
-        } else {
-            // 🎯 PHƯƠNG PHÁP 2: Tính từ khoảng cách
-            let calculatedSpeed = calculateSpeedFromDistance(currentLocation: currentLocation)
-            print("🎯 Using calculated speed: \(calculatedSpeed * 3.6) km/h")
-            return calculatedSpeed
-        }
-    }
-    
-    private func calculateSpeedFromDistance(currentLocation: CLLocation) -> Double {
-        guard let lastValidLocation = lastValidLocation else {
-            lastValidLocation = currentLocation
-            return 0.0
-        }
-        
-        let distance = currentLocation.distance(from: lastValidLocation) // mét
-        let time = currentLocation.timestamp.timeIntervalSince(lastValidLocation.timestamp) // giây
-        
-        // 🎯 CHỈ TÍNH KHI CÓ DI CHUYỂN ĐÁNG KỂ VÀ THỜI GIAN HỢP LỆ
-        guard time > 0 && distance >= 1.0 else {
-            return 0.0
-        }
-        
-        let speed = distance / time // m/s
-        
-        // 🎯 KIỂM TRA TỐC ĐỘ HỢP LỆ (0-50 m/s ≈ 0-180 km/h)
-        guard speed >= 0 && speed < 50.0 else {
-            return 0.0
-        }
-        
-        self.lastValidLocation = currentLocation
-        return speed
-    }
-    
-    // 🎯 CẬP NHẬT TRẠNG THÁI LÁI XE - THƯỜNG XUYÊN
-    private func updateDrivingStatus(speed: Double) {
-        let previousSpeed = currentSpeed
-        currentSpeed = speed * 3.6 // Chuyển sang km/h
-        
-        let wasDriving = isDriving
-        isDriving = currentSpeed >= drivingSpeedThreshold
-        
-        // 🎯 CẬP NHẬT THƯỜNG XUYÊN KHI ĐANG DI CHUYỂN
-        if isDriving || abs(currentSpeed - previousSpeed) > 2.0 {
-            let statusTime = Date()
-            let statusData: [String: Any] = [
-                "type": "DRIVING_STATUS",
-                "message": isDriving ? 
-                    "Đang lái xe ở tốc độ \(String(format: "%.1f", currentSpeed)) km/h" :
-                    "Đã dừng/đang đứng yên",
-                "speed": currentSpeed,
-                "isDriving": isDriving,
-                "timestamp": Int(statusTime.timeIntervalSince1970 * 1000)
-            ]
-            
-            self.sendEventToFlutter(statusData)
-            print("🎯 Driving status: \(isDriving ? "DRIVING" : "STOPPED") at \(currentSpeed) km/h")
-            
-            // 🚨 KIỂM TRA CẢNH BÁO NẾU BẮT ĐẦU LÁI XE KHI ĐANG NGHE ĐIỆN THOẠI
-            if isDriving && !wasDriving && (isInCall || isInVoIPCall) {
-                if isInCall {
-                    checkCallWhileDrivingAlert()
-                }
-                if isInVoIPCall {
-                    let callType = voipCallDetector?.getVoIPCallDuration() != nil ? "voip_active" : "voip_unknown"
-                    checkVoIPCallWhileDrivingAlert(callType: callType)
-                }
-            }
-        }
-    }
-    
-    // MARK: - Tilt Monitoring
-    
-    private func setupTiltMonitoring() {
-        if motionManager == nil {
-            motionManager = CMMotionManager()
-        }
-        
-        guard let motionManager = motionManager else { return }
-        
-        guard motionManager.isAccelerometerAvailable else {
-            print("Accelerometer không khả dụng")
-            return
-        }
-        
-        motionManager.accelerometerUpdateInterval = 0.1
-        
-        motionManager.startAccelerometerUpdates(to: .main) { [weak self] (data, error) in
-            guard let self = self else { return }
-            
-            if let error = error {
-                print("Lỗi accelerometer: \(error.localizedDescription)")
-                return
-            }
-            
-            if let accelerometerData = data {
-                let zAcceleration = accelerometerData.acceleration.z
-                self.updateZStability(zValue: zAcceleration)
-                self.handleTiltDetection(zValue: zAcceleration)
-            }
-        }
-        
-        print("Đã bắt đầu theo dõi cảm biến nghiêng")
-    }
-    
-    private func updateZStability(zValue: Double) {
-        zAccelerationHistory.append(zValue)
-        if zAccelerationHistory.count > zStabilityBufferSize {
-            zAccelerationHistory.removeFirst()
-        }
-        
-        if zAccelerationHistory.count >= 2 {
-            let mean = zAccelerationHistory.reduce(0, +) / Double(zAccelerationHistory.count)
-            let variance = zAccelerationHistory.map { pow($0 - mean, 2) }.reduce(0, +) / Double(zAccelerationHistory.count)
-            zStability = sqrt(variance)
-        }
-    }
-    
-    private func convertTiltToPercent(_ zValue: Double) -> Double {
-        let tiltAbsolute = abs(zValue)
-        let tiltPercent = (tiltAbsolute / 1.0) * 100.0
-        return min(max(tiltPercent, 0.0), 100.0)
-    }
-    
-    private func getTiltStatus(_ tiltPercent: Double) -> String {
-        if tiltPercent <= viewingPhoneThreshold {
-            return "📱 ĐANG XEM"
-        } else if tiltPercent < intermediateThreshold {
-            return "⚡ TRUNG GIAN"
-        } else {
-            return "🔼 KHÔNG XEM"
-        }
-    }
-    
-    private func canSendDangerAlert() -> Bool {
-        guard let lastAlert = lastDangerAlertTime else { return true }
-        return Date().timeIntervalSince(lastAlert) >= dangerAlertCooldown
-    }
-    
-    // 🎯 CẬP NHẬT HÀM HANDLE TILT DETECTION - THÊM 4 TÌNH HUỐNG CẢNH BÁO
-    private func handleTiltDetection(zValue: Double) {
-        let tiltPercent = convertTiltToPercent(zValue)
-        let tiltStatus = getTiltStatus(tiltPercent)
-        let isViewingPhone = tiltPercent <= viewingPhoneThreshold
-        let isZStable = zStability < 1.5
-        
-        // 🚨 CẢNH BÁO 1: WEB BROWSING + LÁI XE
-        let shouldTriggerWebDangerAlert = isDeviceUnlocked && 
-                                         isDriving && 
-                                         isViewingPhone && 
-                                         isZStable &&
-                                         isActiveBrowsing &&
-                                         canSendDangerAlert()
-        
-        // 🚨 CẢNH BÁO 2: CUỘC GỌI DI ĐỘNG + LÁI XE
-        let shouldTriggerCallDangerAlert = isDriving && 
-                                          isInCall && 
-                                          isZStable &&
-                                          canSendCallAlert()
-        
-        // 🚨 CẢNH BÁO 3: CUỘC GỌI ZALO/FACEBOOK + LÁI XE
-        let shouldTriggerVoIPDangerAlert = isDriving && 
-                                          isInVoIPCall && 
-                                          isZStable &&
-                                          canSendVoIPAlert()
-        // 🆕 CẢNH BÁO 4: KHI CHỈ XEM ĐIỆN THOẠI (KHÔNG lướt web)
-        let shouldTriggerPhoneUsageAlert = isDeviceUnlocked && 
-                                        isDriving && 
-                                        isViewingPhone && 
-                                        isZStable && 
-                                        !isActiveBrowsing &&  // 🎯 KHÔNG lướt web
-                                        !isInCall &&          // 🎯 KHÔNG gọi điện
-                                        !isInVoIPCall &&      // 🎯 KHÔNG gọi Zalo
-                                        canSendDangerAlert()
-        
-        // KÍCH HOẠT CÁC CẢNH BÁO
-        if shouldTriggerWebDangerAlert {
-            triggerWebDangerAlert(tiltPercent: tiltPercent, zValue: zValue)
-        }
-        
-        if shouldTriggerCallDangerAlert {
-            checkCallWhileDrivingAlert()
-        }
-        
-        if shouldTriggerVoIPDangerAlert {
-            let callType = voipCallDetector?.getVoIPCallDuration() != nil ? "voip_active" : "voip_unknown"
-            checkVoIPCallWhileDrivingAlert(callType: callType)
-        }
-
-        if shouldTriggerPhoneUsageAlert {
-            triggerPhoneUsageAlert(tiltPercent: tiltPercent, zValue: zValue)
-        }
-        
-        let tiltTime = Date()
-        let tiltData: [String: Any] = [
-            "type": "TILT_EVENT",
-            "message": "Thiết bị: \(tiltStatus)",
-            "tiltValue": zValue,
-            "tiltPercent": tiltPercent,
-            "speed": currentSpeed,
-            "isNetworkActive": isNetworkActive,
-            "isActiveBrowsing": isActiveBrowsing,
-            "isInCall": isInCall,
-            "isVoIPCall": isInVoIPCall,
-            "zStability": zStability,
-            "timestamp": Int(tiltTime.timeIntervalSince1970 * 1000)
-        ]
-        
-        self.sendEventToFlutter(tiltData)
-    }
-    
-    // 🎯 TÁCH HÀM CẢNH BÁO WEB THÀNH RIÊNG
-    private func triggerWebDangerAlert(tiltPercent: Double, zValue: Double) {
-        let dangerTime = Date()
-        lastDangerAlertTime = dangerTime
-        
-        let dangerData: [String: Any] = [
-            "type": "DANGER_EVENT",
-            "message": "CẢNH BÁO NGUY HIỂM: Đang lái xe và LƯỚT WEB!",
-            "tiltValue": zValue,
-            "tiltPercent": tiltPercent,
-            "speed": currentSpeed,
-            "isNetworkActive": isNetworkActive,
-            "isActiveBrowsing": isActiveBrowsing,
-            "zStability": zStability,
-            "timestamp": Int(dangerTime.timeIntervalSince1970 * 1000)
-        ]
-        
-        self.sendEventToFlutter(dangerData)
-        self.sendCriticalNotification(
-            title: "CẢNH BÁO NGUY HIỂM!",
-            message: "Đang lái xe ở \(String(format: "%.1f", currentSpeed)) km/h, sử dụng điện thoại và LƯỚT WEB!"
-        )
-        
-        print("🚨 WEB DANGER ALERT: Driving + Phone Usage + Web Browsing! (Tilt: \(tiltPercent)%)")
-    }
-
-    private func triggerPhoneUsageAlert(tiltPercent: Double, zValue: Double) {
-        let dangerTime = Date()
-        lastDangerAlertTime = dangerTime
-        
-        let dangerData: [String: Any] = [
-            "type": "DANGER_EVENT",  // Dùng chung type để hiển thị cảnh báo đỏ
-            "message": "CẢNH BÁO NGUY HIỂM: Đang lái xe và SỬ DỤNG ĐIỆN THOẠI!",
-            "tiltValue": zValue,
-            "tiltPercent": tiltPercent,
-            "speed": currentSpeed,
-            "isNetworkActive": isNetworkActive,
-            "isActiveBrowsing": isActiveBrowsing,  // sẽ là false
-            "isInCall": isInCall,                  // sẽ là false  
-            "isVoIPCall": isInVoIPCall,            // sẽ là false
-            "zStability": zStability,
-            "timestamp": Int(dangerTime.timeIntervalSince1970 * 1000)
-        ]
-        
-        self.sendEventToFlutter(dangerData)
-        self.sendCriticalNotification(
-            title: "⚠️ CẢNH BÁO NGUY HIỂM!",
-            message: "Đang lái xe ở \(String(format: "%.1f", currentSpeed)) km/h và SỬ DỤNG ĐIỆN THOẠI!"
-        )
-        
-        print("📱 PHONE USAGE ALERT: Driving + Using Phone! Tilt: \(tiltPercent)%")
-    }
-    
-    // MARK: - Lock/Unlock Observers
-    
-    private func setupLockUnlockObservers() {
-        NotificationCenter.default.addObserver(self,
-            selector: #selector(deviceDidUnlock),
-            name: UIApplication.protectedDataDidBecomeAvailableNotification,
-            object: nil)
-        
-        NotificationCenter.default.addObserver(self,
-            selector: #selector(deviceDidLock),
-            name: UIApplication.protectedDataWillBecomeUnavailableNotification,
-            object: nil)
-        
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
-            if let error = error {
-                print("❌ Notification permission error: \(error)")
-            } else {
-                print("🔔 Notification permission: \(granted ? "GRANTED" : "DENIED")")
-            }
-        }
-    }
-    
-    @objc func deviceDidUnlock() {
-        isDeviceUnlocked = true
-        
-        let unlockTime = Date()
-        let unlockData: [String: Any] = [
-            "type": "LOCK_EVENT",
-            "message": "Thiết bị vừa được Mở Khóa",
-            "location": formatTime(unlockTime),
-            "speed": currentSpeed,
-            "isDriving": isDriving,
-            "isInCall": isInCall,
-            "isVoIPCall": isInVoIPCall,
-            "timestamp": Int(unlockTime.timeIntervalSince1970 * 1000)
-        ]
-        
-        self.sendEventToFlutter(unlockData)
-        
-        if isDriving {
-            self.sendCriticalNotification(
-                title: "CẢNH BÁO!",
-                message: "Bạn vừa mở khóa điện thoại khi đang lái xe ở \(String(format: "%.1f", currentSpeed)) km/h"
-            )
-        }
-        
-        print("📱 Device UNLOCKED at \(formatTime(unlockTime)) - Driving: \(isDriving), Speed: \(currentSpeed) km/h, InCall: \(isInCall), VoIPCall: \(isInVoIPCall)")
-    }
-    
-    @objc func deviceDidLock() {
-        isDeviceUnlocked = false
-        
-        let lockTime = Date()
-        let lockData: [String: Any] = [
-            "type": "LOCK_EVENT", 
-            "message": "Thiết bị vừa bị Khóa",
-            "location": formatTime(lockTime),
-            "speed": currentSpeed,
-            "isDriving": isDriving,
-            "isInCall": isInCall,
-            "isVoIPCall": isInVoIPCall,
-            "timestamp": Int(lockTime.timeIntervalSince1970 * 1000)
-        ]
-        
-        self.sendEventToFlutter(lockData)
-        print("🔒 Device LOCKED at \(formatTime(lockTime)) - Speed: \(currentSpeed) km/h, InCall: \(isInCall), VoIPCall: \(isInVoIPCall)")
-    }
-    
-    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        print("❌ Location Manager Error: \(error.localizedDescription)")
-    }
-    
-    func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
-        print("📍 Location Authorization Changed: \(status.rawValue)")
-        
-        switch status {
-        case .authorizedAlways, .authorizedWhenInUse:
-            locationManager?.startUpdatingLocation()
-        default:
-            break
-        }
-    }
-    
-    // MARK: - Flutter Communication
-    
-    private func sendEventToFlutter(_ data: [String: Any]) {
-        guard let eventSink = eventSink else { return }
-        
-        do {
-            let jsonData = try JSONSerialization.data(withJSONObject: data)
-            if let jsonString = String(data: jsonData, encoding: .utf8) {
-                eventSink(jsonString)
-            }
-        } catch {
-            print("❌ Lỗi chuyển đổi JSON: \(error)")
-        }
-    }
-    
-    // MARK: - Notifications
-    
-    private func sendCriticalNotification(title: String, message: String) {
-        let content = UNMutableNotificationContent()
-        content.title = title
-        content.body = message
-        content.sound = UNNotificationSound.defaultCritical
-        
-        if #available(iOS 15.0, *) {
-            content.interruptionLevel = .critical
-        }
-        
-        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request) { error in
-            if let error = error {
-                print("❌ Lỗi gửi thông báo critical: \(error.localizedDescription)")
-            }
-        }
-    }
-    
-    // MARK: - Utility Methods
-    
-    private func formatTime(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
-        return formatter.string(from: date)
-    }
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Unlock & Tilt Monitor',
+      theme: ThemeData.dark().copyWith(
+        scaffoldBackgroundColor: const Color(0xFF121212),
+        cardColor: const Color(0xFF1E1E1E),
+        appBarTheme: const AppBarTheme(backgroundColor: Color(0xFF1F1F1F)),
+      ),
+      home: const MonitorScreen(),
+    );
+  }
 }
 
-// 🎯 REAL NETWORK MONITOR VỚI NGƯỠNG THÔNG MINH
-class RealNetworkMonitor {
-    private var timer: Timer?
-    private var lastNetworkStats: NetworkInterfaceStats?
-    private var activitySamples: [Bool] = []
-    private let sampleSize = 5
-    private var consecutiveActiveCount = 0
-    
-    var onNetworkActivityDetected: ((Bool, String) -> Void)?
-    
-    func startMonitoring() {
-        stopMonitoring()
-        
-        timer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
-            self?.checkRealNetworkActivity()
+class MonitorScreen extends StatefulWidget {
+  const MonitorScreen({super.key});
+
+  @override
+  State<MonitorScreen> createState() => _MonitorScreenState();
+}
+
+class _MonitorScreenState extends State<MonitorScreen> {
+  List<MonitorEvent> _historyEvents = [];
+  MonitorEvent? _latestTiltEvent;
+  MonitorEvent? _latestDangerEvent;
+  String _connectionStatus = "Đang chờ kết nối...";
+  double _currentSpeed = 0.0;
+  bool _isDriving = false;
+  bool _isNetworkActive = false;
+  bool _isActiveBrowsing = false;
+  String _activityType = "";
+
+  // 📞 THÊM BIẾN CHO CALL DETECTION
+  bool _isInCall = false;
+  double _callDuration = 0.0;
+
+  // 📞 THÊM BIẾN CHO VOIP CALL DETECTION
+  bool _isInVoIPCall = false;
+  String _voipCallType = "";
+
+  // 🎯 Lưu trữ lịch sử tilt để tính trung bình 3s
+  final List<double> _tiltHistory = [];
+  static const int _tiltBufferSize = 30;
+  double _averageTiltPercent = 0.0;
+
+  // 🎯 Biến lưu trạng thái tilt hiện tại (đồng bộ)
+  String _currentTiltStatus = "Chờ dữ liệu...";
+  Color _currentTiltColor = Colors.grey;
+
+  @override
+  void initState() {
+    super.initState();
+    _startListeningToEvents();
+  }
+
+  void _startListeningToEvents() {
+    _eventChannel.receiveBroadcastStream().listen(
+      _onEvent,
+      onError: _onError,
+      onDone: _onDone,
+    );
+  }
+
+  // 🎯 Hàm tính tilt trung bình 3s
+  void _updateTiltAverage(double tiltPercent) {
+    _tiltHistory.add(tiltPercent);
+    if (_tiltHistory.length > _tiltBufferSize) {
+      _tiltHistory.removeAt(0);
+    }
+
+    if (_tiltHistory.isNotEmpty) {
+      _averageTiltPercent =
+          _tiltHistory.reduce((a, b) => a + b) / _tiltHistory.length;
+    }
+
+    _currentTiltStatus = _getTiltStatus(_averageTiltPercent);
+    _currentTiltColor = _getTiltColor(_averageTiltPercent);
+  }
+
+  // 🎯 Hàm xác định trạng thái tilt theo ngưỡng mới (80%-90%)
+  String _getTiltStatus(double tiltPercent) {
+    if (tiltPercent <= 80.0) {
+      return "📱 ĐANG XEM";
+    } else if (tiltPercent < 90.0) {
+      return "⚡ TRUNG GIAN";
+    } else {
+      return "🔼 KHÔNG XEM";
+    }
+  }
+
+  // 🎯 Hàm xác định màu sắc theo trạng thái tilt mới
+  Color _getTiltColor(double tiltPercent) {
+    if (tiltPercent <= 80.0) {
+      return Colors.red.shade700;
+    } else if (tiltPercent < 90.0) {
+      return Colors.orange.shade700;
+    } else {
+      return Colors.green.shade700;
+    }
+  }
+
+  void _onEvent(dynamic event) {
+    setState(() {
+      _connectionStatus = "Đã kết nối";
+      try {
+        final Map<String, dynamic> data = jsonDecode(event as String);
+        final monitorEvent = MonitorEvent.fromJson(data);
+
+        // 📞 XỬ LÝ SỰ KIỆN CUỘC GỌI DI ĐỘNG
+        if (monitorEvent.type == 'CALL_EVENT') {
+          bool wasInCall = _isInCall; // 🆕 Lưu trạng thái cũ
+          _isInCall = monitorEvent.isInCall ?? false;
+          _callDuration = monitorEvent.callDuration ?? 0.0;
+
+          // 🆕 RESET KHI CUỘC GỌI KẾT THÚC
+          if (wasInCall && !_isInCall) {
+            _callDuration = 0.0;
+          }
+
+          _historyEvents.insert(0, monitorEvent);
+          print(
+            "📞 Call Event: ${monitorEvent.message} | InCall: $_isInCall | Duration: $_callDuration",
+          );
         }
-        
-        if let timer = timer {
-            RunLoop.current.add(timer, forMode: .common)
-        }
-        
-        print("🌐 Real Network Monitor started")
-    }
-    
-    func stopMonitoring() {
-        timer?.invalidate()
-        timer = nil
-    }
-    
-    func notifyLocationUpdate() {
-        // Không cần cooldown
-    }
-    
-    private func checkRealNetworkActivity() {
-        let currentStats = getCurrentNetworkStats()
-        let isActive = detectRealNetworkActivity(currentStats: currentStats)
-        let activityType = determineActivityType(currentStats: currentStats)
-        
-        // 🎯 LOGIC XÁC NHẬN THÔNG MINH
-        if isActive {
-            consecutiveActiveCount += 1
-        } else {
-            consecutiveActiveCount = max(0, consecutiveActiveCount - 1)
-        }
-        
-        // 🎯 CHỈ XÁC NHẬN KHI CÓ 3 LẦN ACTIVE LIÊN TIẾP
-        let confirmedActive = consecutiveActiveCount >= 3
-        
-        DispatchQueue.main.async {
-            self.onNetworkActivityDetected?(confirmedActive, activityType)
-        }
-        
-        lastNetworkStats = currentStats
-    }
-    
-    private func getCurrentNetworkStats() -> NetworkInterfaceStats {
-        var stats = NetworkInterfaceStats()
-        
-        if let interfaceStats = getNetworkInterfaceStatistics() {
-            stats.bytesReceived = interfaceStats.bytesReceived
-            stats.bytesSent = interfaceStats.bytesSent
-            stats.packetsReceived = interfaceStats.packetsReceived
-            stats.hasActiveInterface = true
-        }
-        
-        stats.activeConnections = getActiveURLSessionTasks()
-        
-        return stats
-    }
-    
-    private func detectRealNetworkActivity(currentStats: NetworkInterfaceStats) -> Bool {
-        guard let lastStats = lastNetworkStats else { return false }
-        
-        let receivedDiff = currentStats.bytesReceived - lastStats.bytesReceived
-        let sentDiff = currentStats.bytesSent - lastStats.bytesSent
-        let packetsDiff = currentStats.packetsReceived - lastStats.packetsReceived
-        
-        print("🌐 Traffic Diff - Received: \(receivedDiff), Sent: \(sentDiff), Packets: \(packetsDiff)")
-        
-        // 🎯 NGƯỠNG THÔNG MINH
-        let hasModerateDownload = receivedDiff > 60000    // 60KB - web có ảnh
-        let hasLargeDownload = receivedDiff > 150000      // 🆕 150KB - video streaming
-        let hasModerateUpload = sentDiff > 30000          // 30KB
-        let hasPacketActivity = packetsDiff > 20          // 20 packets
-        let hasMinimalPackets = packetsDiff > 5           // 🆕 5 packets - cho video
-        let hasActiveConnections = currentStats.activeConnections > 3
-        
-        // 🎯 KẾT HỢP NHIỀU YẾU TỐ - THÊM ĐIỀU KIỆN VIDEO
-        let isActive = (hasModerateDownload && hasPacketActivity) || 
-                    (hasModerateUpload && hasPacketActivity) ||
-                    (hasActiveConnections && hasModerateDownload) ||
-                    (receivedDiff > 50000 && packetsDiff > 20) || // Web nhẹ
-                    (hasLargeDownload && hasMinimalPackets)       // 🆕 VIDEO STREAMING!
-        
-        print("🌐 Network Activity Result: \(isActive) - Consecutive: \(consecutiveActiveCount)")
-        return isActive
-    }
-    
-    private func determineActivityType(currentStats: NetworkInterfaceStats) -> String {
-        guard let lastStats = lastNetworkStats else { return "Không có dữ liệu" }
-        
-        let receivedDiff = currentStats.bytesReceived - lastStats.bytesReceived
-        let sentDiff = currentStats.bytesSent - lastStats.bytesSent
-        let packetsDiff = currentStats.packetsReceived - lastStats.packetsReceived
-        
-        // 🆕 KIỂM TRA VIDEO STREAMING ĐẶC BIỆT
-        let isLikelyVideoStreaming = receivedDiff > 150000 && packetsDiff > 5
-        
-        if isLikelyVideoStreaming {
-            return "Xem video trực tuyến (YouTube/Netflix)"
-        } else if receivedDiff > 150000 {
-            return "Tải dữ liệu lớn (video/file)"
-        } else if receivedDiff > 80000 {
-            return "Đang xem web có ảnh"
-        } else if receivedDiff > 50000 {
-            return "Đang lướt web"
-        } else if sentDiff > 30000 {
-            return "Đang upload/gửi dữ liệu"
-        } else {
-            return "Hoạt động mạng nhẹ"
-        }
-    }
-    
-    private func getNetworkInterfaceStatistics() -> (bytesReceived: Int, bytesSent: Int, packetsReceived: Int)? {
-        var ifaddrs: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&ifaddrs) == 0 else { return nil }
-        
-        defer { freeifaddrs(ifaddrs) }
-        
-        var totalReceived: Int = 0
-        var totalSent: Int = 0
-        var totalPackets: Int = 0
-        
-        var pointer = ifaddrs
-        while pointer != nil {
-            defer { pointer = pointer?.pointee.ifa_next }
-            
-            guard let interface = pointer?.pointee else { continue }
-            let name = String(cString: interface.ifa_name)
-            
-            if name.hasPrefix("en") || name.hasPrefix("pdp_ip") {
-                if let data = interface.ifa_data {
-                    let stats = data.withMemoryRebound(to: if_data.self, capacity: 1) { $0.pointee }
-                    totalReceived += Int(stats.ifi_ibytes)
-                    totalSent += Int(stats.ifi_obytes)
-                    totalPackets += Int(stats.ifi_ipackets)
-                }
+        // 📞 XỬ LÝ SỰ KIỆN CUỘC GỌI VOIP (ZALO/FACEBOOK)
+        else if (monitorEvent.type == 'VOIP_CALL_EVENT') {
+          bool wasInVoIPCall = _isInVoIPCall; // 🆕 Lưu trạng thái cũ
+          _isInVoIPCall = monitorEvent.isVoIPCall ?? false;
+          _voipCallType = monitorEvent.callType ?? "";
+
+          // 🆕 RESET KHI CUỘC GỌI KẾT THÚC
+          if (wasInVoIPCall && !_isInVoIPCall) {
+            _voipCallType = "";
+          }
+
+          _historyEvents.insert(0, monitorEvent);
+          print(
+            "📱 VoIP Call Event: ${monitorEvent.message} | InCall: $_isInVoIPCall | Type: $_voipCallType",
+          );
+        } else if (monitorEvent.type == 'TILT_EVENT') {
+          _latestTiltEvent = monitorEvent;
+          if (monitorEvent.tiltPercent != null) {
+            _updateTiltAverage(monitorEvent.tiltPercent!);
+          }
+          // 🎯 Cập nhật trạng thái web browsing
+          if (monitorEvent.isActiveBrowsing != null) {
+            _isActiveBrowsing = monitorEvent.isActiveBrowsing!;
+          }
+          // 📞 Cập nhật trạng thái call từ tilt event
+          if (monitorEvent.isInCall != null) {
+            bool wasInCall = _isInCall; // 🆕 Lưu trạng thái cũ
+            _isInCall = monitorEvent.isInCall!;
+
+            // 🆕 RESET KHI CUỘC GỌI KẾT THÚC
+            if (wasInCall && !_isInCall) {
+              _callDuration = 0.0;
             }
-        }
-        
-        return (totalReceived, totalSent, totalPackets)
-    }
-    
-    private func getActiveURLSessionTasks() -> Int {
-        return 0
-    }
-}
+          }
+          // 🆕 CẬP NHẬT VOIP TỪ TILT EVENT
+          if (monitorEvent.isVoIPCall != null) {
+            bool wasInVoIPCall = _isInVoIPCall; // 🆕 Lưu trạng thái cũ
+            _isInVoIPCall = monitorEvent.isVoIPCall!;
 
-struct NetworkInterfaceStats {
-    var bytesReceived: Int = 0
-    var bytesSent: Int = 0
-    var packetsReceived: Int = 0
-    var hasActiveInterface: Bool = false
-    var activeConnections: Int = 0
-}
+            // 🆕 RESET KHI CUỘC GỌI KẾT THÚC
+            if (wasInVoIPCall && !_isInVoIPCall) {
+              _voipCallType = "";
+            }
+          }
+        } else if (monitorEvent.type == 'DANGER_EVENT') {
+          _latestDangerEvent = monitorEvent;
+          _historyEvents.insert(0, monitorEvent);
+        } else if (monitorEvent.type == 'NETWORK_STATUS') {
+          _isNetworkActive = monitorEvent.isNetworkActive ?? false;
+          _historyEvents.insert(0, monitorEvent);
+        }
+        // 🎯 XỬ LÝ SỰ KIỆN NETWORK ANALYSIS
+        else if (monitorEvent.type == 'NETWORK_ANALYSIS') {
+          _isActiveBrowsing = monitorEvent.isActiveBrowsing ?? false;
+          _historyEvents.insert(0, monitorEvent);
+        }
+        // 🆚 XỬ LÝ SỰ KIỆN REAL NETWORK ANALYSIS MỚI
+        else if (monitorEvent.type == 'REAL_NETWORK_ANALYSIS') {
+          _isActiveBrowsing = monitorEvent.isActiveBrowsing ?? false;
+          _activityType = monitorEvent.activityType ?? "";
+          _historyEvents.insert(0, monitorEvent);
+          print("🌐 Real Network Event: ${monitorEvent.message}");
+        } else if (monitorEvent.type == 'DRIVING_STATUS' ||
+            monitorEvent.type == 'LOCATION_UPDATE') {
+          _currentSpeed = monitorEvent.speed ?? 0.0;
+          _isDriving = monitorEvent.isDriving ?? false;
+          _historyEvents.insert(0, monitorEvent);
+        } else if (monitorEvent.type == 'SPEED_UPDATE') {
+          _currentSpeed = monitorEvent.speed ?? 0.0;
+          _isDriving = monitorEvent.isDriving ?? false;
+        } else {
+          _historyEvents.insert(0, monitorEvent);
+        }
 
-// 🎯 NETWORK CONGESTION DETECTOR
-class NetworkCongestionDetector {
-    private var pingTimer: Timer?
-    
-    var onNetworkStatusUpdate: ((Bool) -> Void)?
-    
-    func startMonitoring() {
-        stopMonitoring()
-        
-        pingTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
-            self?.performNetworkAnalysis()
+        // 🆕 DEBUG LOG ĐỂ KIỂM TRA
+        print("""
+  📊 STATE UPDATE:
+    isInCall: $_isInCall (duration: $_callDuration)
+    isInVoIPCall: $_isInVoIPCall (type: $_voipCallType)
+    anyCallActive: ${_isInCall || _isInVoIPCall}
+  """);
+      } catch (e) {
+        _connectionStatus = "Lỗi phân tích JSON: $e";
+        print('Error decoding JSON: $e, Raw event: $event');
+      }
+    });
+  }
+
+  void _onError(Object error) {
+    setState(() {
+      _connectionStatus = "Lỗi kết nối: ${error.toString()}";
+      print('EventChannel Error: $error');
+    });
+  }
+
+  void _onDone() {
+    setState(() {
+      _connectionStatus = "Kênh truyền tin đã đóng.";
+    });
+  }
+
+  Widget _buildDangerAlertCard() {
+    if (_latestDangerEvent == null) return const SizedBox.shrink();
+
+    String dangerType = "";
+    if (_latestDangerEvent!.isActiveBrowsing == true) {
+      dangerType = "LƯỚT WEB";
+    } else if (_latestDangerEvent!.isInCall == true &&
+        _latestDangerEvent!.isVoIPCall != true) {
+      dangerType = "GỌI ĐIỆN THOẠI";
+    } else if (_latestDangerEvent!.isVoIPCall == true) {
+      dangerType = "GỌI ZALO/FACEBOOK";
+    } else {
+      dangerType = "SỬ DỤNG ĐIỆN THOẠI"; // 🆕 THÊM DÒNG NÀY
+    }
+
+    return Card(
+      elevation: 8,
+      color: Colors.red.shade900,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.warning_amber, color: Colors.yellow, size: 30),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'CẢNH BÁO NGUY HIỂM - $dangerType',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _latestDangerEvent!.message,
+              style: const TextStyle(
+                fontSize: 16,
+                color: Colors.white,
+                fontWeight: FontWeight.w500,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Thời gian: ${_latestDangerEvent!.timestamp.toString().substring(11, 19)}',
+              style: const TextStyle(color: Colors.white70, fontSize: 12),
+            ),
+            if (_latestDangerEvent!.tiltPercent != null)
+              Text(
+                'Tilt: ${_latestDangerEvent!.tiltPercent!.toStringAsFixed(1)}% | Web: ${_isActiveBrowsing ? "Đang lướt" : "Không lướt"}${_activityType.isNotEmpty ? " • $_activityType" : ""}',
+                style: const TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+            if (_latestDangerEvent!.isInCall == true &&
+                _latestDangerEvent!.isVoIPCall != true)
+              Text(
+                '📞 Đang nghe điện thoại: ${_callDuration.toStringAsFixed(0)} giây',
+                style: const TextStyle(
+                  color: Colors.yellow,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            if (_latestDangerEvent!.isVoIPCall == true)
+              Text(
+                '📱 Đang gọi Zalo/Facebook: ${_voipCallType.isNotEmpty ? _voipCallType : "Đang gọi"}',
+                style: const TextStyle(
+                  color: Colors.orange,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // 📞 CARD HIỂN THỊ TRẠNG THÁI TẤT CẢ CUỘC GỌI
+  Widget _buildCallStatusCard() {
+    final bool anyCallActive = _isInCall || _isInVoIPCall;
+    final String callStatus = anyCallActive
+        ? (_isInVoIPCall ? "ĐANG GỌI ZALO/FACEBOOK" : "ĐANG GỌI ĐIỆN THOẠI")
+        : "KHÔNG CÓ CUỘC GỌI";
+
+    final Color cardColor = anyCallActive
+        ? Colors.red.shade900
+        : Colors.green.shade900;
+    final IconData callIcon = anyCallActive
+        ? (_isInVoIPCall ? Icons.video_call : Icons.phone_in_talk)
+        : Icons.phone_disabled;
+
+    return Card(
+      elevation: 4,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      color: cardColor,
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(callIcon, color: Colors.white, size: 30),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    callStatus,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (anyCallActive) ...[
+              const SizedBox(height: 8),
+              if (_isInCall)
+                Text(
+                  'Thời gian gọi: ${_callDuration.toStringAsFixed(0)} giây',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white,
+                  ),
+                ),
+              if (_isInVoIPCall)
+                Text(
+                  'Loại gọi: ${_voipCallType.replaceAll("voip_", "").toUpperCase()}',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white,
+                  ),
+                ),
+              const SizedBox(height: 4),
+              Text(
+                'CẢNH BÁO: Không nghe/gọi điện thoại khi đang lái xe',
+                style: const TextStyle(
+                  fontSize: 14,
+                  color: Colors.yellow,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ] else ...[
+              const SizedBox(height: 8),
+              Text(
+                'An toàn - không có cuộc gọi nào',
+                style: const TextStyle(fontSize: 14, color: Colors.white70),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDrivingStatusCard() {
+    final bool anyCallActive = _isInCall || _isInVoIPCall;
+
+    return Card(
+      elevation: 4,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      color: _isDriving ? Colors.orange.shade900 : Colors.green.shade900,
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  _isDriving ? Icons.directions_car : Icons.person,
+                  color: Colors.white,
+                  size: 30,
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  _isDriving ? 'ĐANG LÁI XE' : 'ĐANG DỪNG/ĐỨNG YÊN',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Tốc độ: ${_currentSpeed.toStringAsFixed(1)} km/h',
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              _isDriving
+                  ? 'Đang di chuyển - vui lòng tập trung lái xe'
+                  : 'An toàn - không di chuyển',
+              style: const TextStyle(fontSize: 14, color: Colors.white70),
+            ),
+            if (_isDriving && anyCallActive) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.red.withOpacity(0.3),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.red, width: 1),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.warning, color: Colors.yellow, size: 20),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'NGUY HIỂM: Đang lái xe và ${_isInVoIPCall ? "GỌI ZALO/FACEBOOK" : "NGHE ĐIỆN THOẠI"}!',
+                        style: TextStyle(
+                          color: Colors.yellow,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTiltMonitorCard() {
+    final double tiltValue = _latestTiltEvent?.tiltValue ?? 0.0;
+    final String tiltMessage = _latestTiltEvent?.message ?? 'Chờ dữ liệu...';
+
+    final String tiltStatus = _currentTiltStatus;
+    final Color tiltColor = _currentTiltColor;
+
+    return Card(
+      elevation: 6,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      child: Padding(
+        padding: const EdgeInsets.all(20.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.screen_rotation, color: tiltColor, size: 30),
+                const SizedBox(width: 10),
+                const Text(
+                  'Cảm Biến Nghiêng (Gia Tốc Kế)',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
+              ],
+            ),
+            const Divider(color: Colors.white10, height: 20),
+
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: tiltColor.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: tiltColor, width: 2),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    _averageTiltPercent <= 80.0
+                        ? Icons.warning
+                        : _averageTiltPercent < 90.0
+                        ? Icons.info
+                        : Icons.check_circle,
+                    color: tiltColor,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      tiltStatus,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: tiltColor,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 12),
+            Text(
+              'Góc Nghiêng Hiện Tại: ${tiltValue.toStringAsFixed(3)} rad',
+              style: const TextStyle(fontSize: 14, color: Colors.white70),
+            ),
+            Text(
+              'Tilt Trung Bình (3s): ${_averageTiltPercent.toStringAsFixed(1)}%',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: tiltColor,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Trạng Thái: $tiltMessage',
+              style: const TextStyle(fontSize: 14, color: Colors.white70),
+            ),
+
+            // 🎯 HIỂN THỊ THÔNG TIN MẠNG CHI TIẾT
+            const SizedBox(height: 12),
+            const Divider(color: Colors.white10),
+            const Text(
+              '📊 Phân Tích Mạng Thực Tế:',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
+            ),
+            const SizedBox(height: 8),
+
+            // 🆚 HIỂN THỊ ACTIVITY TYPE NẾU CÓ
+            if (_activityType.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8.0),
+                child: Text(
+                  'Loại hoạt động: $_activityType',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.blue.shade300,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ),
+
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildNetworkInfoItem(
+                        'Mạng:',
+                        _isNetworkActive ? "📶 Đang kết nối" : "📵 Mất kết nối",
+                        _isNetworkActive
+                            ? Colors.green.shade400
+                            : Colors.red.shade400,
+                      ),
+                      _buildNetworkInfoItem(
+                        'Web:',
+                        _isActiveBrowsing
+                            ? "🌐 Đang lướt web"
+                            : "💤 Không lướt web",
+                        _isActiveBrowsing
+                            ? Colors.blue.shade400
+                            : Colors.grey.shade400,
+                      ),
+                      _buildNetworkInfoItem(
+                        'Gọi di động:',
+                        _isInCall ? "📞 Đang gọi" : "📵 Không gọi",
+                        _isInCall ? Colors.red.shade400 : Colors.green.shade400,
+                      ),
+                      _buildNetworkInfoItem(
+                        'Gọi Zalo/FB:',
+                        _isInVoIPCall ? "📱 Đang gọi" : "📵 Không gọi",
+                        _isInVoIPCall
+                            ? Colors.orange.shade400
+                            : Colors.green.shade400,
+                      ),
+                    ],
+                  ),
+                ),
+                // 🎯 HIỂN THỊ TRẠNG THÁI REAL-TIME DETECTION
+                Column(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: _isActiveBrowsing
+                            ? Colors.blue.withOpacity(0.2)
+                            : Colors.green.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: _isActiveBrowsing ? Colors.blue : Colors.green,
+                          width: 1,
+                        ),
+                      ),
+                      child: Text(
+                        _isActiveBrowsing ? 'WEB' : 'NO WEB',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: _isActiveBrowsing ? Colors.blue : Colors.green,
+                        ),
+                      ),
+                    ),
+                    SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: _isInCall
+                            ? Colors.red.withOpacity(0.2)
+                            : Colors.green.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: _isInCall ? Colors.red : Colors.green,
+                          width: 1,
+                        ),
+                      ),
+                      child: Text(
+                        _isInCall ? 'CALL' : 'NO CALL',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: _isInCall ? Colors.red : Colors.green,
+                        ),
+                      ),
+                    ),
+                    SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: _isInVoIPCall
+                            ? Colors.orange.withOpacity(0.2)
+                            : Colors.green.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: _isInVoIPCall ? Colors.orange : Colors.green,
+                          width: 1,
+                        ),
+                      ),
+                      child: Text(
+                        _isInVoIPCall ? 'VOIP' : 'NO VOIP',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: _isInVoIPCall ? Colors.orange : Colors.green,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+
+            if (_latestTiltEvent != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8.0),
+                child: Text(
+                  'Cập nhật: ${_latestTiltEvent!.timestamp.toString().substring(11, 19)}',
+                  style: const TextStyle(fontSize: 12, color: Colors.white54),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNetworkInfoItem(String label, String value, Color color) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8.0),
+      child: Row(
+        children: [
+          Text(
+            label,
+            style: const TextStyle(fontSize: 14, color: Colors.white70),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              value,
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: color,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatusBar() {
+    final bool anyCallActive = _isInCall || _isInVoIPCall;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.8),
+        border: Border(bottom: BorderSide(color: Colors.white12, width: 1)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            decoration: BoxDecoration(
+              color: _currentTiltColor.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: _currentTiltColor, width: 1),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  _averageTiltPercent <= 80.0
+                      ? Icons.phone_android
+                      : _averageTiltPercent < 90.0
+                      ? Icons.phone_iphone
+                      : Icons.phone_disabled,
+                  color: _currentTiltColor,
+                  size: 16,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  _currentTiltStatus,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: _currentTiltColor,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            decoration: BoxDecoration(
+              color: _isDriving
+                  ? Colors.orange.withOpacity(0.2)
+                  : Colors.green.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: _isDriving ? Colors.orange : Colors.green,
+                width: 1,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  _isDriving ? Icons.directions_car : Icons.person,
+                  color: _isDriving ? Colors.orange : Colors.green,
+                  size: 16,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  _isDriving ? 'ĐANG LÁI' : 'DỪNG',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: _isDriving ? Colors.orange : Colors.green,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            decoration: BoxDecoration(
+              color: _isActiveBrowsing
+                  ? Colors.blue.withOpacity(0.2)
+                  : Colors.grey.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: _isActiveBrowsing ? Colors.blue : Colors.grey,
+                width: 1,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  _isActiveBrowsing ? Icons.web : Icons.web_asset,
+                  color: _isActiveBrowsing ? Colors.blue : Colors.grey,
+                  size: 16,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  _isActiveBrowsing ? 'WEB' : 'NO WEB',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: _isActiveBrowsing ? Colors.blue : Colors.grey,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            decoration: BoxDecoration(
+              color: anyCallActive
+                  ? Colors.red.withOpacity(0.2)
+                  : Colors.grey.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: anyCallActive ? Colors.red : Colors.grey,
+                width: 1,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  anyCallActive ? Icons.phone : Icons.phone_disabled,
+                  color: anyCallActive ? Colors.red : Colors.grey,
+                  size: 16,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  anyCallActive ? 'CALL' : 'NO CALL',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: anyCallActive ? Colors.red : Colors.grey,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEventTile(MonitorEvent event) {
+    Color eventColor;
+    IconData icon;
+    String subtitle =
+        'Thời gian: ${event.timestamp.toString().substring(0, 19)}';
+
+    switch (event.type) {
+      case 'LOCK_EVENT':
+        final bool isUnlocked = event.message.contains('Mở Khóa');
+        eventColor = isUnlocked ? Colors.green.shade400 : Colors.red.shade400;
+        icon = isUnlocked ? Icons.lock_open : Icons.lock;
+        if (event.location != null) {
+          subtitle += '\nVị trí: ${event.location}';
         }
-    }
-    
-    func stopMonitoring() {
-        pingTimer?.invalidate()
-        pingTimer = nil
-    }
-    
-    func setLocationUpdateCooldown() {
-        // Không cần cooldown
-    }
-    
-    private func performNetworkAnalysis() {
-        // Đơn giản hóa, chủ yếu dựa vào RealNetworkMonitor
-        DispatchQueue.main.async {
-            self.onNetworkStatusUpdate?(false)
+        break;
+
+      case 'DANGER_EVENT':
+        eventColor = Colors.red.shade400;
+        icon = Icons.warning;
+        if (event.speed != null) {
+          subtitle += '\nTốc độ: ${event.speed!.toStringAsFixed(1)} km/h';
         }
+        if (event.tiltPercent != null) {
+          subtitle += '\nTilt: ${event.tiltPercent!.toStringAsFixed(1)}%';
+        }
+        if (event.isActiveBrowsing != null) {
+          subtitle +=
+              '\nWeb: ${event.isActiveBrowsing! ? "Đang lướt" : "Không lướt"}';
+        }
+        if (event.isInCall == true && event.isVoIPCall != true) {
+          subtitle += '\n📞 Đang nghe điện thoại';
+        }
+        if (event.isVoIPCall == true) {
+          subtitle += '\n📱 Đang gọi Zalo/Facebook';
+        }
+        break;
+
+      case 'DRIVING_STATUS':
+        eventColor = event.isDriving == true
+            ? Colors.orange.shade400
+            : Colors.blue.shade400;
+        icon = event.isDriving == true ? Icons.directions_car : Icons.person;
+        if (event.speed != null) {
+          subtitle += '\nTốc độ: ${event.speed!.toStringAsFixed(1)} km/h';
+        }
+        break;
+
+      case 'NETWORK_STATUS':
+        eventColor = event.isNetworkActive == true
+            ? Colors.green.shade400
+            : Colors.red.shade400;
+        icon = event.isNetworkActive == true ? Icons.wifi : Icons.wifi_off;
+        subtitle += '\nTrạng thái mạng';
+        break;
+
+      // 🎯 CASE: Network Analysis
+      case 'NETWORK_ANALYSIS':
+        eventColor = event.isActiveBrowsing == true
+            ? Colors.blue.shade400
+            : Colors.grey.shade400;
+        icon = event.isActiveBrowsing == true
+            ? Icons.network_check
+            : Icons.network_wifi;
+        subtitle +=
+            '\nTrạng thái: ${event.isActiveBrowsing! ? "Đang lướt web" : "Không lướt web"}';
+        break;
+
+      // 🆚 CASE MỚI: Real Network Analysis
+      case 'REAL_NETWORK_ANALYSIS':
+        eventColor = event.isActiveBrowsing == true
+            ? Colors.purple.shade400
+            : Colors.grey.shade400;
+        icon = event.isActiveBrowsing == true
+            ? Icons.network_ping
+            : Icons.network_wifi;
+        subtitle +=
+            '\nPhát hiện thực tế: ${event.activityType ?? "Không xác định"}';
+        break;
+
+      // 📞 CASE MỚI: Call Event
+      case 'CALL_EVENT':
+        eventColor = event.isInCall == true
+            ? Colors.red.shade400
+            : Colors.green.shade400;
+        icon = event.isInCall == true
+            ? Icons.phone_in_talk
+            : Icons.phone_disabled;
+        subtitle +=
+            '\nTrạng thái: ${event.isInCall! ? "Đang gọi" : "Không gọi"}';
+        if (event.callDuration != null) {
+          subtitle += '\nThời gian: ${event.callDuration!.toStringAsFixed(0)}s';
+        }
+        break;
+
+      // 📞 CASE MỚI: VoIP Call Event
+      case 'VOIP_CALL_EVENT':
+        eventColor = event.isVoIPCall == true
+            ? Colors.orange.shade400
+            : Colors.green.shade400;
+        icon = event.isVoIPCall == true ? Icons.video_call : Icons.videocam_off;
+        subtitle +=
+            '\nTrạng thái: ${event.isVoIPCall! ? "Đang gọi Zalo/FB" : "Không gọi"}';
+        if (event.callType != null) {
+          subtitle += '\nLoại: ${event.callType!.replaceAll("voip_", "")}';
+        }
+        break;
+
+      case 'LOCATION_UPDATE':
+        eventColor = Colors.purple.shade400;
+        icon = Icons.location_on;
+        if (event.speed != null) {
+          subtitle += '\nTốc độ: ${event.speed!.toStringAsFixed(1)} km/h';
+        }
+        break;
+
+      default:
+        eventColor = Colors.grey.shade400;
+        icon = Icons.info;
     }
+
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 4.0),
+      elevation: 2,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(10),
+        side: BorderSide(color: eventColor.withOpacity(0.3), width: 1),
+      ),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16.0,
+          vertical: 8.0,
+        ),
+        leading: Icon(icon, color: eventColor, size: 32),
+        title: Text(
+          event.message,
+          style: TextStyle(fontWeight: FontWeight.bold, color: eventColor),
+        ),
+        subtitle: Text(subtitle, style: const TextStyle(color: Colors.white70)),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bool anyCallActive = _isInCall || _isInVoIPCall;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Theo Dõi An Toàn Lái Xe'),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(48.0),
+          child: Column(
+            children: [
+              _buildStatusBar(),
+              Container(
+                color: Colors.white12,
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 4.0),
+                child: Text(
+                  'Kết nối: $_connectionStatus | Tilt: ${_averageTiltPercent.toStringAsFixed(1)}% | Tốc độ: ${_currentSpeed.toStringAsFixed(1)} km/h | Web: ${_isActiveBrowsing ? "Đang lướt" : "Không lướt"} | Gọi: ${anyCallActive ? "Đang gọi" : "Không gọi"}${_activityType.isNotEmpty ? " • $_activityType" : ""}',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 12, color: Colors.white70),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      body: CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.all(12.0),
+              child: _buildDangerAlertCard(),
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.all(12.0),
+              child: _buildCallStatusCard(),
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.all(12.0),
+              child: _buildDrivingStatusCard(),
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.all(12.0),
+              child: _buildTiltMonitorCard(),
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.only(
+                left: 16.0,
+                right: 16.0,
+                top: 10.0,
+                bottom: 8.0,
+              ),
+              child: Text(
+                'Lịch Sử Sự Kiện',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.blueAccent,
+                ),
+              ),
+            ),
+          ),
+          _historyEvents.isEmpty
+              ? SliverToBoxAdapter(
+                  child: Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(32.0),
+                      child: Text(
+                        'Chưa có sự kiện nào được ghi lại.',
+                        style: TextStyle(color: Colors.white70, fontSize: 16),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+                )
+              : SliverList(
+                  delegate: SliverChildBuilderDelegate((context, index) {
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12.0),
+                      child: _buildEventTile(_historyEvents[index]),
+                    );
+                  }, childCount: _historyEvents.length),
+                ),
+        ],
+      ),
+    );
+  }
 }
