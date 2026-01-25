@@ -127,20 +127,39 @@ class VoIPCallDetector: NSObject {
     }
     
     private func isAudioRouteIndicatingCall(_ route: AVAudioSessionRouteDescription) -> Bool {
-        // Kiểm tra xem audio route có chỉ ra đang trong cuộc gọi không
-        let hasMicrophone = route.inputs.contains { $0.portType == .builtInMic }
-        let hasReceiver = route.outputs.contains { $0.portType == .builtInReceiver }
-        let hasSpeaker = route.outputs.contains { $0.portType == .builtInSpeaker }
-        let hasHeadphones = route.outputs.contains { $0.portType == .headphones }
+        let inputs = route.inputs.map { $0.portType }
+        let outputs = route.outputs.map { $0.portType }
         
-        // 🎯 CÁC TÌNH HUỐNG CHO THẤY ĐANG TRONG CUỘC GỌI VOIP:
-        // 1. Có mic + receiver (áp tai nghe) - Zalo/Facebook call
-        // 2. Có mic + speaker (loa ngoài) - Zalo/Facebook call loa ngoài
-        // 3. Có mic + headphones (tai nghe) - Zalo/Facebook call tai nghe
-        let isInCall = hasMicrophone && (hasReceiver || hasSpeaker || hasHeadphones)
+        // 🎯 KIỂM TRA BLUETOOTH - NẾU CÓ BLUETOOTH → KHÔNG BÁO VOIP
+        let hasBluetooth = inputs.contains { port in
+            port == .bluetoothHFP || 
+            port == .bluetoothA2DP || 
+            port == .bluetoothLE ||
+            port.rawValue.contains("Bluetooth")
+        } || outputs.contains { port in
+            port == .bluetoothHFP || 
+            port == .bluetoothA2DP || 
+            port == .bluetoothLE ||
+            port.rawValue.contains("Bluetooth")
+        }
         
-        print("🎧 VoIP Audio Route - Mic: \(hasMicrophone), Receiver: \(hasReceiver), Speaker: \(hasSpeaker) -> InCall: \(isInCall)")
-        return isInCall
+        // 🚗 NẾU CÓ BLUETOOTH → KHÔNG PHẢI VOIP NGUY HIỂM
+        if hasBluetooth {
+            print("🎧 Bluetooth device detected - Safe for calls")
+            return false  // ❌ KHÔNG BÁO VOIP
+        }
+        
+        // 🎯 PHÁT HIỆN CUỘC GỌI VoIP THÔNG THƯỜNG (KHÔNG Bluetooth)
+        let hasMicrophone = inputs.contains { $0 == .builtInMic }
+        let hasReceiver = outputs.contains { $0 == .builtInReceiver }
+        let hasSpeaker = outputs.contains { $0 == .builtInSpeaker }
+        let hasHeadphones = outputs.contains { $0 == .headphones }
+        
+        // 📱 CUỘC GỌI VoIP THẬT: điện thoại cầm tay (không Bluetooth)
+        let isRealVoIPCall = hasMicrophone && (hasReceiver || hasSpeaker || hasHeadphones)
+        
+        print("🎧 Audio Route - Bluetooth: \(hasBluetooth), IsVoIPCall: \(isRealVoIPCall)")
+        return isRealVoIPCall
     }
     
     private func handleVoIPCallStarted() {
@@ -228,6 +247,9 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
     private var lastVoIPAlertTime: Date?
     private let voipAlertCooldown: TimeInterval = 10.0 // 10 giây giữa các cảnh báo VoIP
     
+    // 🎯 THÊM BLUETOOTH DETECTION
+    private var isBluetoothConnected = false
+    
     // Ngưỡng
     private let drivingSpeedThreshold: Double = 10.0 // km/h
     private let viewingPhoneThreshold: Double = 80.0
@@ -248,7 +270,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         setupRealNetworkMonitoring()
         setupSpeedUpdateTimer()
         setupCallDetection()
-        setupVoIPDetection() // 🎯 THÊM DÒNG NÀY
+        setupVoIPDetection()
     }
     
     // MARK: - FlutterStreamHandler Methods
@@ -275,7 +297,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         networkCongestionDetector?.startMonitoring()
         realNetworkMonitor?.startMonitoring()
         callDetector?.startMonitoring()
-        voipCallDetector?.startMonitoring() // 🎯 THÊM DÒNG NÀY
+        voipCallDetector?.startMonitoring()
         
         print("Unlock Monitor: Đã đăng ký và bắt đầu theo dõi (bao gồm call + VoIP detection).")
     }
@@ -287,10 +309,23 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         networkCongestionDetector?.stopMonitoring()
         realNetworkMonitor?.stopMonitoring()
         callDetector = nil
-        voipCallDetector?.stopMonitoring() // 🎯 THÊM DÒNG NÀY
+        voipCallDetector?.stopMonitoring()
         voipCallDetector = nil
         speedUpdateTimer?.invalidate()
         NotificationCenter.default.removeObserver(self)
+    }
+    
+    // 🎯 THÊM PHƯƠNG THỨC BLUETOOTH CHECK
+    private func isUsingBluetooth() -> Bool {
+        let currentRoute = AVAudioSession.sharedInstance().currentRoute
+        let allPorts = currentRoute.inputs.map { $0.portType } + currentRoute.outputs.map { $0.portType }
+        
+        return allPorts.contains { port in
+            port == .bluetoothHFP || 
+            port == .bluetoothA2DP || 
+            port == .bluetoothLE ||
+            port.rawValue.lowercased().contains("bluetooth")
+        }
     }
     
     // 🎯 THÊM PHƯƠNG THỨC VOIP DETECTION
@@ -395,6 +430,12 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
     
     // 🎯 THÊM HÀM KIỂM TRA CẢNH BÁO KHI NGHE ĐIỆN THOẠI LÁI XE
     private func checkCallWhileDrivingAlert() {
+        // 🎯 KIỂM TRA BLUETOOTH TRƯỚC
+        if isUsingBluetooth() {
+            print("📞 Phone Call via Bluetooth - NO ALERT (Safe)")
+            return  // 🎧 AN TOÀN - KHÔNG CẢNH BÁO
+        }
+        
         guard canSendCallAlert() else { return }
         
         let dangerTime = Date()
@@ -402,7 +443,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         
         let dangerData: [String: Any] = [
             "type": "DANGER_EVENT",
-            "message": "CẢNH BÁO NGUY HIỂM: Đang lái xe và NGHE ĐIỆN THOẠI!",
+            "message": "🚨 NGUY HIỂM CẤP ĐỘ CAO: Đang lái xe và NGHE ĐIỆN THOẠI!",
             "speed": currentSpeed,
             "isInCall": true,
             "callDuration": getCallDuration() ?? 0,
@@ -411,8 +452,8 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         
         self.sendEventToFlutter(dangerData)
         self.sendCriticalNotification(
-            title: "CẢNH BÁO NGUY HIỂM!",
-            message: "Đang lái xe ở \(String(format: "%.1f", currentSpeed)) km/h và NGHE ĐIỆN THOẠI!"
+            title: "🚨 NGUY HIỂM KHI LÁI XE!",
+            message: "Đang lái xe ở \(String(format: "%.1f", currentSpeed)) km/h và NGHE ĐIỆN THOẠI - TẬP TRUNG LÁI XE!"
         )
         
         print("🚨 CALL DANGER ALERT: Driving + Phone Call! Speed: \(currentSpeed) km/h")
@@ -420,6 +461,12 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
     
     // 🎯 THÊM HÀM CẢNH BÁO CHO VOIP CALL
     private func checkVoIPCallWhileDrivingAlert(callType: String) {
+        // 🎯 KIỂM TRA BLUETOOTH TRƯỚC
+        if isUsingBluetooth() {
+            print("📱 VoIP Call via Bluetooth - NO ALERT (Safe)")
+            return  // 🎧 AN TOÀN - KHÔNG CẢNH BÁO
+        }
+        
         guard canSendVoIPAlert() else { return }
         
         let dangerTime = Date()
@@ -430,7 +477,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         
         let dangerData: [String: Any] = [
             "type": "DANGER_EVENT",
-            "message": "CẢNH BÁO NGUY HIỂM: Đang lái xe và GỌI \(appName)!",
+            "message": "⚠️ CẢNH BÁO: Đang lái xe và GỌI VIDEO/THOẠI QUA ỨNG DỤNG!",
             "speed": currentSpeed,
             "isInCall": true,
             "isVoIPCall": true,
@@ -441,8 +488,8 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         
         self.sendEventToFlutter(dangerData)
         self.sendCriticalNotification(
-            title: "CẢNH BÁO NGUY HIỂM!",
-            message: "Đang lái xe ở \(String(format: "%.1f", currentSpeed)) km/h và GỌI \(appName)!"
+            title: "⚠️ CẢNH BÁO AN TOÀN!",
+            message: "Đang lái xe ở \(String(format: "%.1f", currentSpeed)) km/h và GỌI ỨNG DỤNG - RẤT NGUY HIỂM!"
         )
         
         print("🚨 VOIP CALL DANGER ALERT: Driving + \(appName) Call! Speed: \(currentSpeed) km/h, Duration: \(callDuration)s")
@@ -832,7 +879,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         
         let dangerData: [String: Any] = [
             "type": "DANGER_EVENT",
-            "message": "CẢNH BÁO NGUY HIỂM: Đang lái xe và LƯỚT WEB!",
+            "message": "🚨 NGUY HIỂM CẤP ĐỘ CAO: Đang lái xe và LƯỚT WEB/ỨNG DỤNG!",
             "tiltValue": zValue,
             "tiltPercent": tiltPercent,
             "speed": currentSpeed,
@@ -844,8 +891,8 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         
         self.sendEventToFlutter(dangerData)
         self.sendCriticalNotification(
-            title: "CẢNH BÁO NGUY HIỂM!",
-            message: "Đang lái xe ở \(String(format: "%.1f", currentSpeed)) km/h, sử dụng điện thoại và LƯỚT WEB!"
+            title: "🚨 NGUY HIỂM KHI LÁI XE!",
+            message: "Đang lái xe ở \(String(format: "%.1f", currentSpeed)) km/h và LƯỚT WEB - VÔ CÙNG NGUY HIỂM!"
         )
         
         print("🚨 WEB DANGER ALERT: Driving + Phone Usage + Web Browsing! (Tilt: \(tiltPercent)%)")
@@ -856,8 +903,8 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         lastDangerAlertTime = dangerTime
         
         let dangerData: [String: Any] = [
-            "type": "DANGER_EVENT",  // Dùng chung type để hiển thị cảnh báo đỏ
-            "message": "CẢNH BÁO NGUY HIỂM: Đang lái xe và SỬ DỤNG ĐIỆN THOẠI!",
+            "type": "DANGER_EVENT",
+            "message": "⚠️ CẢNH BÁO: Đang lái xe và SỬ DỤNG ĐIỆN THOẠI!",
             "tiltValue": zValue,
             "tiltPercent": tiltPercent,
             "speed": currentSpeed,
@@ -871,8 +918,8 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         
         self.sendEventToFlutter(dangerData)
         self.sendCriticalNotification(
-            title: "⚠️ CẢNH BÁO NGUY HIỂM!",
-            message: "Đang lái xe ở \(String(format: "%.1f", currentSpeed)) km/h và SỬ DỤNG ĐIỆN THOẠI!"
+            title: "⚠️ CẢNH BÁO!",
+            message: "Đang lái xe ở \(String(format: "%.1f", currentSpeed)) km/h và DÙNG ĐIỆN THOẠI!"
         )
         
         print("📱 PHONE USAGE ALERT: Driving + Using Phone! Tilt: \(tiltPercent)%")
@@ -1084,7 +1131,7 @@ class RealNetworkMonitor {
         
         print("🌐 Traffic Diff - Received: \(receivedDiff), Sent: \(sentDiff), Packets: \(packetsDiff)")
         
-        // 🎯 NGƯỠNG THÔNG MINH
+        // 🎯 NGƯỠNG THÔNG MINH - PHÙ HỢP WEB NHƯNG TRÁNH APP NỀN
         let hasModerateDownload = receivedDiff > 60000    // 60KB - web có ảnh
         let hasLargeDownload = receivedDiff > 150000      // 🆕 150KB - video streaming
         let hasModerateUpload = sentDiff > 30000          // 30KB
@@ -1094,10 +1141,10 @@ class RealNetworkMonitor {
         
         // 🎯 KẾT HỢP NHIỀU YẾU TỐ - THÊM ĐIỀU KIỆN VIDEO
         let isActive = (hasModerateDownload && hasPacketActivity) || 
-                    (hasModerateUpload && hasPacketActivity) ||
-                    (hasActiveConnections && hasModerateDownload) ||
-                    (receivedDiff > 50000 && packetsDiff > 20) || // Web nhẹ
-                    (hasLargeDownload && hasMinimalPackets)       // 🆕 VIDEO STREAMING!
+                      (hasModerateUpload && hasPacketActivity) ||
+                      (hasActiveConnections && hasModerateDownload) ||
+                      (receivedDiff > 50000 && packetsDiff > 20) || // Web nhẹ
+                      (hasLargeDownload && hasMinimalPackets)       // 🆕 VIDEO STREAMING!
         
         print("🌐 Network Activity Result: \(isActive) - Consecutive: \(consecutiveActiveCount)")
         return isActive
