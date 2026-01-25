@@ -9,7 +9,9 @@ void main() {
   runApp(const MyApp());
 }
 
-const EventChannel _eventChannel = EventChannel('com.example.app/monitor_events');
+const EventChannel _eventChannel = EventChannel(
+  'com.example.app/monitor_events',
+);
 
 class MonitorEvent {
   final String type;
@@ -22,11 +24,11 @@ class MonitorEvent {
   final bool? isNetworkActive;
   final double? zStability;
   final DateTime timestamp;
-  
+
   // 🎯 CÁC TRƯỜNG CHO NETWORK DETECTION
   final bool? isActiveBrowsing;
   final String? activityType;
-  
+
   // 📞 THÊM TRƯỜNG CHO CALL DETECTION
   final bool? isInCall;
   final String? callState;
@@ -89,9 +91,7 @@ class MyApp extends StatelessWidget {
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF121212),
         cardColor: const Color(0xFF1E1E1E),
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Color(0xFF1F1F1F),
-        ),
+        appBarTheme: const AppBarTheme(backgroundColor: Color(0xFF1F1F1F)),
       ),
       home: const MonitorScreen(),
     );
@@ -115,11 +115,11 @@ class _MonitorScreenState extends State<MonitorScreen> {
   bool _isNetworkActive = false;
   bool _isActiveBrowsing = false;
   String _activityType = "";
-  
+
   // 📞 THÊM BIẾN CHO CALL DETECTION
   bool _isInCall = false;
   double _callDuration = 0.0;
-  
+
   // 📞 THÊM BIẾN CHO VOIP CALL DETECTION
   bool _isInVoIPCall = false;
   String _voipCallType = "";
@@ -155,7 +155,8 @@ class _MonitorScreenState extends State<MonitorScreen> {
     }
 
     if (_tiltHistory.isNotEmpty) {
-      _averageTiltPercent = _tiltHistory.reduce((a, b) => a + b) / _tiltHistory.length;
+      _averageTiltPercent =
+          _tiltHistory.reduce((a, b) => a + b) / _tiltHistory.length;
     }
 
     _currentTiltStatus = _getTiltStatus(_averageTiltPercent);
@@ -193,19 +194,36 @@ class _MonitorScreenState extends State<MonitorScreen> {
 
         // 📞 XỬ LÝ SỰ KIỆN CUỘC GỌI DI ĐỘNG
         if (monitorEvent.type == 'CALL_EVENT') {
+          bool wasInCall = _isInCall; // 🆕 Lưu trạng thái cũ
           _isInCall = monitorEvent.isInCall ?? false;
           _callDuration = monitorEvent.callDuration ?? 0.0;
+
+          // 🆕 RESET KHI CUỘC GỌI KẾT THÚC
+          if (wasInCall && !_isInCall) {
+            _callDuration = 0.0;
+          }
+
           _historyEvents.insert(0, monitorEvent);
-          print("📞 Call Event: ${monitorEvent.message}");
+          print(
+            "📞 Call Event: ${monitorEvent.message} | InCall: $_isInCall | Duration: $_callDuration",
+          );
         }
         // 📞 XỬ LÝ SỰ KIỆN CUỘC GỌI VOIP (ZALO/FACEBOOK)
         else if (monitorEvent.type == 'VOIP_CALL_EVENT') {
+          bool wasInVoIPCall = _isInVoIPCall; // 🆕 Lưu trạng thái cũ
           _isInVoIPCall = monitorEvent.isVoIPCall ?? false;
           _voipCallType = monitorEvent.callType ?? "";
+
+          // 🆕 RESET KHI CUỘC GỌI KẾT THÚC
+          if (wasInVoIPCall && !_isInVoIPCall) {
+            _voipCallType = "";
+          }
+
           _historyEvents.insert(0, monitorEvent);
-          print("📱 VoIP Call Event: ${monitorEvent.message}");
-        }
-        else if (monitorEvent.type == 'TILT_EVENT') {
+          print(
+            "📱 VoIP Call Event: ${monitorEvent.message} | InCall: $_isInVoIPCall | Type: $_voipCallType",
+          );
+        } else if (monitorEvent.type == 'TILT_EVENT') {
           _latestTiltEvent = monitorEvent;
           if (monitorEvent.tiltPercent != null) {
             _updateTiltAverage(monitorEvent.tiltPercent!);
@@ -216,17 +234,31 @@ class _MonitorScreenState extends State<MonitorScreen> {
           }
           // 📞 Cập nhật trạng thái call từ tilt event
           if (monitorEvent.isInCall != null) {
+            bool wasInCall = _isInCall; // 🆕 Lưu trạng thái cũ
             _isInCall = monitorEvent.isInCall!;
+
+            // 🆕 RESET KHI CUỘC GỌI KẾT THÚC
+            if (wasInCall && !_isInCall) {
+              _callDuration = 0.0;
+            }
           }
-        } 
-        else if (monitorEvent.type == 'DANGER_EVENT') {
+          // 🆕 CẬP NHẬT VOIP TỪ TILT EVENT
+          if (monitorEvent.isVoIPCall != null) {
+            bool wasInVoIPCall = _isInVoIPCall; // 🆕 Lưu trạng thái cũ
+            _isInVoIPCall = monitorEvent.isVoIPCall!;
+
+            // 🆕 RESET KHI CUỘC GỌI KẾT THÚC
+            if (wasInVoIPCall && !_isInVoIPCall) {
+              _voipCallType = "";
+            }
+          }
+        } else if (monitorEvent.type == 'DANGER_EVENT') {
           _latestDangerEvent = monitorEvent;
           _historyEvents.insert(0, monitorEvent);
-        } 
-        else if (monitorEvent.type == 'NETWORK_STATUS') {
+        } else if (monitorEvent.type == 'NETWORK_STATUS') {
           _isNetworkActive = monitorEvent.isNetworkActive ?? false;
           _historyEvents.insert(0, monitorEvent);
-        } 
+        }
         // 🎯 XỬ LÝ SỰ KIỆN NETWORK ANALYSIS
         else if (monitorEvent.type == 'NETWORK_ANALYSIS') {
           _isActiveBrowsing = monitorEvent.isActiveBrowsing ?? false;
@@ -238,19 +270,25 @@ class _MonitorScreenState extends State<MonitorScreen> {
           _activityType = monitorEvent.activityType ?? "";
           _historyEvents.insert(0, monitorEvent);
           print("🌐 Real Network Event: ${monitorEvent.message}");
-        }
-        else if (monitorEvent.type == 'DRIVING_STATUS' || monitorEvent.type == 'LOCATION_UPDATE') {
+        } else if (monitorEvent.type == 'DRIVING_STATUS' ||
+            monitorEvent.type == 'LOCATION_UPDATE') {
           _currentSpeed = monitorEvent.speed ?? 0.0;
           _isDriving = monitorEvent.isDriving ?? false;
           _historyEvents.insert(0, monitorEvent);
-        }
-        else if (monitorEvent.type == 'SPEED_UPDATE') {
+        } else if (monitorEvent.type == 'SPEED_UPDATE') {
           _currentSpeed = monitorEvent.speed ?? 0.0;
           _isDriving = monitorEvent.isDriving ?? false;
-        }
-        else {
+        } else {
           _historyEvents.insert(0, monitorEvent);
         }
+
+        // 🆕 DEBUG LOG ĐỂ KIỂM TRA
+        print("""
+  📊 STATE UPDATE:
+    isInCall: $_isInCall (duration: $_callDuration)
+    isInVoIPCall: $_isInVoIPCall (type: $_voipCallType)
+    anyCallActive: ${_isInCall || _isInVoIPCall}
+  """);
       } catch (e) {
         _connectionStatus = "Lỗi phân tích JSON: $e";
         print('Error decoding JSON: $e, Raw event: $event');
@@ -277,10 +315,13 @@ class _MonitorScreenState extends State<MonitorScreen> {
     String dangerType = "";
     if (_latestDangerEvent!.isActiveBrowsing == true) {
       dangerType = "LƯỚT WEB";
-    } else if (_latestDangerEvent!.isInCall == true && _latestDangerEvent!.isVoIPCall != true) {
+    } else if (_latestDangerEvent!.isInCall == true &&
+        _latestDangerEvent!.isVoIPCall != true) {
       dangerType = "GỌI ĐIỆN THOẠI";
     } else if (_latestDangerEvent!.isVoIPCall == true) {
       dangerType = "GỌI ZALO/FACEBOOK";
+    } else {
+      dangerType = "SỬ DỤNG ĐIỆN THOẠI"; // 🆕 THÊM DÒNG NÀY
     }
 
     return Card(
@@ -327,15 +368,24 @@ class _MonitorScreenState extends State<MonitorScreen> {
                 'Tilt: ${_latestDangerEvent!.tiltPercent!.toStringAsFixed(1)}% | Web: ${_isActiveBrowsing ? "Đang lướt" : "Không lướt"}${_activityType.isNotEmpty ? " • $_activityType" : ""}',
                 style: const TextStyle(color: Colors.white70, fontSize: 12),
               ),
-            if (_latestDangerEvent!.isInCall == true && _latestDangerEvent!.isVoIPCall != true)
+            if (_latestDangerEvent!.isInCall == true &&
+                _latestDangerEvent!.isVoIPCall != true)
               Text(
                 '📞 Đang nghe điện thoại: ${_callDuration.toStringAsFixed(0)} giây',
-                style: const TextStyle(color: Colors.yellow, fontSize: 12, fontWeight: FontWeight.bold),
+                style: const TextStyle(
+                  color: Colors.yellow,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             if (_latestDangerEvent!.isVoIPCall == true)
               Text(
                 '📱 Đang gọi Zalo/Facebook: ${_voipCallType.isNotEmpty ? _voipCallType : "Đang gọi"}',
-                style: const TextStyle(color: Colors.orange, fontSize: 12, fontWeight: FontWeight.bold),
+                style: const TextStyle(
+                  color: Colors.orange,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
           ],
         ),
@@ -346,14 +396,16 @@ class _MonitorScreenState extends State<MonitorScreen> {
   // 📞 CARD HIỂN THỊ TRẠNG THÁI TẤT CẢ CUỘC GỌI
   Widget _buildCallStatusCard() {
     final bool anyCallActive = _isInCall || _isInVoIPCall;
-    final String callStatus = anyCallActive ? 
-        (_isInVoIPCall ? "ĐANG GỌI ZALO/FACEBOOK" : "ĐANG GỌI ĐIỆN THOẠI") : 
-        "KHÔNG CÓ CUỘC GỌI";
-    
-    final Color cardColor = anyCallActive ? Colors.red.shade900 : Colors.green.shade900;
-    final IconData callIcon = anyCallActive ? 
-        (_isInVoIPCall ? Icons.video_call : Icons.phone_in_talk) : 
-        Icons.phone_disabled;
+    final String callStatus = anyCallActive
+        ? (_isInVoIPCall ? "ĐANG GỌI ZALO/FACEBOOK" : "ĐANG GỌI ĐIỆN THOẠI")
+        : "KHÔNG CÓ CUỘC GỌI";
+
+    final Color cardColor = anyCallActive
+        ? Colors.red.shade900
+        : Colors.green.shade900;
+    final IconData callIcon = anyCallActive
+        ? (_isInVoIPCall ? Icons.video_call : Icons.phone_in_talk)
+        : Icons.phone_disabled;
 
     return Card(
       elevation: 4,
@@ -382,7 +434,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
             ),
             if (anyCallActive) ...[
               const SizedBox(height: 8),
-              if (_isInCall) 
+              if (_isInCall)
                 Text(
                   'Thời gian gọi: ${_callDuration.toStringAsFixed(0)} giây',
                   style: const TextStyle(
@@ -413,10 +465,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
               const SizedBox(height: 8),
               Text(
                 'An toàn - không có cuộc gọi nào',
-                style: const TextStyle(
-                  fontSize: 14,
-                  color: Colors.white70,
-                ),
+                style: const TextStyle(fontSize: 14, color: Colors.white70),
               ),
             ],
           ],
@@ -427,7 +476,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
 
   Widget _buildDrivingStatusCard() {
     final bool anyCallActive = _isInCall || _isInVoIPCall;
-    
+
     return Card(
       elevation: 4,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
@@ -466,13 +515,10 @@ class _MonitorScreenState extends State<MonitorScreen> {
             ),
             const SizedBox(height: 4),
             Text(
-              _isDriving 
+              _isDriving
                   ? 'Đang di chuyển - vui lòng tập trung lái xe'
                   : 'An toàn - không di chuyển',
-              style: const TextStyle(
-                fontSize: 14,
-                color: Colors.white70,
-              ),
+              style: const TextStyle(fontSize: 14, color: Colors.white70),
             ),
             if (_isDriving && anyCallActive) ...[
               const SizedBox(height: 8),
@@ -510,7 +556,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
   Widget _buildTiltMonitorCard() {
     final double tiltValue = _latestTiltEvent?.tiltValue ?? 0.0;
     final String tiltMessage = _latestTiltEvent?.message ?? 'Chờ dữ liệu...';
-    
+
     final String tiltStatus = _currentTiltStatus;
     final Color tiltColor = _currentTiltColor;
 
@@ -528,12 +574,16 @@ class _MonitorScreenState extends State<MonitorScreen> {
                 const SizedBox(width: 10),
                 const Text(
                   'Cảm Biến Nghiêng (Gia Tốc Kế)',
-                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
                 ),
               ],
             ),
             const Divider(color: Colors.white10, height: 20),
-            
+
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(
@@ -544,8 +594,11 @@ class _MonitorScreenState extends State<MonitorScreen> {
               child: Row(
                 children: [
                   Icon(
-                    _averageTiltPercent <= 80.0 ? Icons.warning : 
-                    _averageTiltPercent < 90.0 ? Icons.info : Icons.check_circle,
+                    _averageTiltPercent <= 80.0
+                        ? Icons.warning
+                        : _averageTiltPercent < 90.0
+                        ? Icons.info
+                        : Icons.check_circle,
                     color: tiltColor,
                   ),
                   const SizedBox(width: 8),
@@ -562,7 +615,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
                 ],
               ),
             ),
-            
+
             const SizedBox(height: 12),
             Text(
               'Góc Nghiêng Hiện Tại: ${tiltValue.toStringAsFixed(3)} rad',
@@ -581,16 +634,20 @@ class _MonitorScreenState extends State<MonitorScreen> {
               'Trạng Thái: $tiltMessage',
               style: const TextStyle(fontSize: 14, color: Colors.white70),
             ),
-            
+
             // 🎯 HIỂN THỊ THÔNG TIN MẠNG CHI TIẾT
             const SizedBox(height: 12),
             const Divider(color: Colors.white10),
             const Text(
               '📊 Phân Tích Mạng Thực Tế:',
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
             ),
             const SizedBox(height: 8),
-            
+
             // 🆚 HIỂN THỊ ACTIVITY TYPE NẾU CÓ
             if (_activityType.isNotEmpty)
               Padding(
@@ -604,25 +661,41 @@ class _MonitorScreenState extends State<MonitorScreen> {
                   ),
                 ),
               ),
-            
+
             Row(
               children: [
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _buildNetworkInfoItem('Mạng:', 
-                          _isNetworkActive ? "📶 Đang kết nối" : "📵 Mất kết nối",
-                          _isNetworkActive ? Colors.green.shade400 : Colors.red.shade400),
-                      _buildNetworkInfoItem('Web:', 
-                          _isActiveBrowsing ? "🌐 Đang lướt web" : "💤 Không lướt web",
-                          _isActiveBrowsing ? Colors.blue.shade400 : Colors.grey.shade400),
-                      _buildNetworkInfoItem('Gọi di động:', 
-                          _isInCall ? "📞 Đang gọi" : "📵 Không gọi",
-                          _isInCall ? Colors.red.shade400 : Colors.green.shade400),
-                      _buildNetworkInfoItem('Gọi Zalo/FB:', 
-                          _isInVoIPCall ? "📱 Đang gọi" : "📵 Không gọi",
-                          _isInVoIPCall ? Colors.orange.shade400 : Colors.green.shade400),
+                      _buildNetworkInfoItem(
+                        'Mạng:',
+                        _isNetworkActive ? "📶 Đang kết nối" : "📵 Mất kết nối",
+                        _isNetworkActive
+                            ? Colors.green.shade400
+                            : Colors.red.shade400,
+                      ),
+                      _buildNetworkInfoItem(
+                        'Web:',
+                        _isActiveBrowsing
+                            ? "🌐 Đang lướt web"
+                            : "💤 Không lướt web",
+                        _isActiveBrowsing
+                            ? Colors.blue.shade400
+                            : Colors.grey.shade400,
+                      ),
+                      _buildNetworkInfoItem(
+                        'Gọi di động:',
+                        _isInCall ? "📞 Đang gọi" : "📵 Không gọi",
+                        _isInCall ? Colors.red.shade400 : Colors.green.shade400,
+                      ),
+                      _buildNetworkInfoItem(
+                        'Gọi Zalo/FB:',
+                        _isInVoIPCall ? "📱 Đang gọi" : "📵 Không gọi",
+                        _isInVoIPCall
+                            ? Colors.orange.shade400
+                            : Colors.green.shade400,
+                      ),
                     ],
                   ),
                 ),
@@ -630,9 +703,14 @@ class _MonitorScreenState extends State<MonitorScreen> {
                 Column(
                   children: [
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 6,
+                      ),
                       decoration: BoxDecoration(
-                        color: _isActiveBrowsing ? Colors.blue.withOpacity(0.2) : Colors.green.withOpacity(0.2),
+                        color: _isActiveBrowsing
+                            ? Colors.blue.withOpacity(0.2)
+                            : Colors.green.withOpacity(0.2),
                         borderRadius: BorderRadius.circular(20),
                         border: Border.all(
                           color: _isActiveBrowsing ? Colors.blue : Colors.green,
@@ -650,9 +728,14 @@ class _MonitorScreenState extends State<MonitorScreen> {
                     ),
                     SizedBox(height: 8),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 6,
+                      ),
                       decoration: BoxDecoration(
-                        color: _isInCall ? Colors.red.withOpacity(0.2) : Colors.green.withOpacity(0.2),
+                        color: _isInCall
+                            ? Colors.red.withOpacity(0.2)
+                            : Colors.green.withOpacity(0.2),
                         borderRadius: BorderRadius.circular(20),
                         border: Border.all(
                           color: _isInCall ? Colors.red : Colors.green,
@@ -670,9 +753,14 @@ class _MonitorScreenState extends State<MonitorScreen> {
                     ),
                     SizedBox(height: 8),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 6,
+                      ),
                       decoration: BoxDecoration(
-                        color: _isInVoIPCall ? Colors.orange.withOpacity(0.2) : Colors.green.withOpacity(0.2),
+                        color: _isInVoIPCall
+                            ? Colors.orange.withOpacity(0.2)
+                            : Colors.green.withOpacity(0.2),
                         borderRadius: BorderRadius.circular(20),
                         border: Border.all(
                           color: _isInVoIPCall ? Colors.orange : Colors.green,
@@ -692,7 +780,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
                 ),
               ],
             ),
-            
+
             if (_latestTiltEvent != null)
               Padding(
                 padding: const EdgeInsets.only(top: 8.0),
@@ -720,7 +808,11 @@ class _MonitorScreenState extends State<MonitorScreen> {
           Expanded(
             child: Text(
               value,
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: color),
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: color,
+              ),
             ),
           ),
         ],
@@ -730,15 +822,13 @@ class _MonitorScreenState extends State<MonitorScreen> {
 
   Widget _buildStatusBar() {
     final bool anyCallActive = _isInCall || _isInVoIPCall;
-    
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
       decoration: BoxDecoration(
         color: Colors.black.withOpacity(0.8),
-        border: Border(
-          bottom: BorderSide(color: Colors.white12, width: 1),
-        ),
+        border: Border(bottom: BorderSide(color: Colors.white12, width: 1)),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -753,8 +843,11 @@ class _MonitorScreenState extends State<MonitorScreen> {
             child: Row(
               children: [
                 Icon(
-                  _averageTiltPercent <= 80.0 ? Icons.phone_android : 
-                  _averageTiltPercent < 90.0 ? Icons.phone_iphone : Icons.phone_disabled,
+                  _averageTiltPercent <= 80.0
+                      ? Icons.phone_android
+                      : _averageTiltPercent < 90.0
+                      ? Icons.phone_iphone
+                      : Icons.phone_disabled,
                   color: _currentTiltColor,
                   size: 16,
                 ),
@@ -770,11 +863,13 @@ class _MonitorScreenState extends State<MonitorScreen> {
               ],
             ),
           ),
-          
+
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             decoration: BoxDecoration(
-              color: _isDriving ? Colors.orange.withOpacity(0.2) : Colors.green.withOpacity(0.2),
+              color: _isDriving
+                  ? Colors.orange.withOpacity(0.2)
+                  : Colors.green.withOpacity(0.2),
               borderRadius: BorderRadius.circular(20),
               border: Border.all(
                 color: _isDriving ? Colors.orange : Colors.green,
@@ -800,11 +895,13 @@ class _MonitorScreenState extends State<MonitorScreen> {
               ],
             ),
           ),
-          
+
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             decoration: BoxDecoration(
-              color: _isActiveBrowsing ? Colors.blue.withOpacity(0.2) : Colors.grey.withOpacity(0.2),
+              color: _isActiveBrowsing
+                  ? Colors.blue.withOpacity(0.2)
+                  : Colors.grey.withOpacity(0.2),
               borderRadius: BorderRadius.circular(20),
               border: Border.all(
                 color: _isActiveBrowsing ? Colors.blue : Colors.grey,
@@ -834,7 +931,9 @@ class _MonitorScreenState extends State<MonitorScreen> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             decoration: BoxDecoration(
-              color: anyCallActive ? Colors.red.withOpacity(0.2) : Colors.grey.withOpacity(0.2),
+              color: anyCallActive
+                  ? Colors.red.withOpacity(0.2)
+                  : Colors.grey.withOpacity(0.2),
               borderRadius: BorderRadius.circular(20),
               border: Border.all(
                 color: anyCallActive ? Colors.red : Colors.grey,
@@ -868,7 +967,8 @@ class _MonitorScreenState extends State<MonitorScreen> {
   Widget _buildEventTile(MonitorEvent event) {
     Color eventColor;
     IconData icon;
-    String subtitle = 'Thời gian: ${event.timestamp.toString().substring(0, 19)}';
+    String subtitle =
+        'Thời gian: ${event.timestamp.toString().substring(0, 19)}';
 
     switch (event.type) {
       case 'LOCK_EVENT':
@@ -879,7 +979,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
           subtitle += '\nVị trí: ${event.location}';
         }
         break;
-      
+
       case 'DANGER_EVENT':
         eventColor = Colors.red.shade400;
         icon = Icons.warning;
@@ -890,7 +990,8 @@ class _MonitorScreenState extends State<MonitorScreen> {
           subtitle += '\nTilt: ${event.tiltPercent!.toStringAsFixed(1)}%';
         }
         if (event.isActiveBrowsing != null) {
-          subtitle += '\nWeb: ${event.isActiveBrowsing! ? "Đang lướt" : "Không lướt"}';
+          subtitle +=
+              '\nWeb: ${event.isActiveBrowsing! ? "Đang lướt" : "Không lướt"}';
         }
         if (event.isInCall == true && event.isVoIPCall != true) {
           subtitle += '\n📞 Đang nghe điện thoại';
@@ -899,40 +1000,59 @@ class _MonitorScreenState extends State<MonitorScreen> {
           subtitle += '\n📱 Đang gọi Zalo/Facebook';
         }
         break;
-      
+
       case 'DRIVING_STATUS':
-        eventColor = event.isDriving == true ? Colors.orange.shade400 : Colors.blue.shade400;
+        eventColor = event.isDriving == true
+            ? Colors.orange.shade400
+            : Colors.blue.shade400;
         icon = event.isDriving == true ? Icons.directions_car : Icons.person;
         if (event.speed != null) {
           subtitle += '\nTốc độ: ${event.speed!.toStringAsFixed(1)} km/h';
         }
         break;
-      
+
       case 'NETWORK_STATUS':
-        eventColor = event.isNetworkActive == true ? Colors.green.shade400 : Colors.red.shade400;
+        eventColor = event.isNetworkActive == true
+            ? Colors.green.shade400
+            : Colors.red.shade400;
         icon = event.isNetworkActive == true ? Icons.wifi : Icons.wifi_off;
         subtitle += '\nTrạng thái mạng';
         break;
 
       // 🎯 CASE: Network Analysis
       case 'NETWORK_ANALYSIS':
-        eventColor = event.isActiveBrowsing == true ? Colors.blue.shade400 : Colors.grey.shade400;
-        icon = event.isActiveBrowsing == true ? Icons.network_check : Icons.network_wifi;
-        subtitle += '\nTrạng thái: ${event.isActiveBrowsing! ? "Đang lướt web" : "Không lướt web"}';
+        eventColor = event.isActiveBrowsing == true
+            ? Colors.blue.shade400
+            : Colors.grey.shade400;
+        icon = event.isActiveBrowsing == true
+            ? Icons.network_check
+            : Icons.network_wifi;
+        subtitle +=
+            '\nTrạng thái: ${event.isActiveBrowsing! ? "Đang lướt web" : "Không lướt web"}';
         break;
 
       // 🆚 CASE MỚI: Real Network Analysis
       case 'REAL_NETWORK_ANALYSIS':
-        eventColor = event.isActiveBrowsing == true ? Colors.purple.shade400 : Colors.grey.shade400;
-        icon = event.isActiveBrowsing == true ? Icons.network_ping : Icons.network_wifi;
-        subtitle += '\nPhát hiện thực tế: ${event.activityType ?? "Không xác định"}';
+        eventColor = event.isActiveBrowsing == true
+            ? Colors.purple.shade400
+            : Colors.grey.shade400;
+        icon = event.isActiveBrowsing == true
+            ? Icons.network_ping
+            : Icons.network_wifi;
+        subtitle +=
+            '\nPhát hiện thực tế: ${event.activityType ?? "Không xác định"}';
         break;
 
       // 📞 CASE MỚI: Call Event
       case 'CALL_EVENT':
-        eventColor = event.isInCall == true ? Colors.red.shade400 : Colors.green.shade400;
-        icon = event.isInCall == true ? Icons.phone_in_talk : Icons.phone_disabled;
-        subtitle += '\nTrạng thái: ${event.isInCall! ? "Đang gọi" : "Không gọi"}';
+        eventColor = event.isInCall == true
+            ? Colors.red.shade400
+            : Colors.green.shade400;
+        icon = event.isInCall == true
+            ? Icons.phone_in_talk
+            : Icons.phone_disabled;
+        subtitle +=
+            '\nTrạng thái: ${event.isInCall! ? "Đang gọi" : "Không gọi"}';
         if (event.callDuration != null) {
           subtitle += '\nThời gian: ${event.callDuration!.toStringAsFixed(0)}s';
         }
@@ -940,14 +1060,17 @@ class _MonitorScreenState extends State<MonitorScreen> {
 
       // 📞 CASE MỚI: VoIP Call Event
       case 'VOIP_CALL_EVENT':
-        eventColor = event.isVoIPCall == true ? Colors.orange.shade400 : Colors.green.shade400;
+        eventColor = event.isVoIPCall == true
+            ? Colors.orange.shade400
+            : Colors.green.shade400;
         icon = event.isVoIPCall == true ? Icons.video_call : Icons.videocam_off;
-        subtitle += '\nTrạng thái: ${event.isVoIPCall! ? "Đang gọi Zalo/FB" : "Không gọi"}';
+        subtitle +=
+            '\nTrạng thái: ${event.isVoIPCall! ? "Đang gọi Zalo/FB" : "Không gọi"}';
         if (event.callType != null) {
           subtitle += '\nLoại: ${event.callType!.replaceAll("voip_", "")}';
         }
         break;
-      
+
       case 'LOCATION_UPDATE':
         eventColor = Colors.purple.shade400;
         icon = Icons.location_on;
@@ -955,7 +1078,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
           subtitle += '\nTốc độ: ${event.speed!.toStringAsFixed(1)} km/h';
         }
         break;
-      
+
       default:
         eventColor = Colors.grey.shade400;
         icon = Icons.info;
@@ -969,19 +1092,16 @@ class _MonitorScreenState extends State<MonitorScreen> {
         side: BorderSide(color: eventColor.withOpacity(0.3), width: 1),
       ),
       child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16.0,
+          vertical: 8.0,
+        ),
         leading: Icon(icon, color: eventColor, size: 32),
         title: Text(
           event.message,
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            color: eventColor,
-          ),
+          style: TextStyle(fontWeight: FontWeight.bold, color: eventColor),
         ),
-        subtitle: Text(
-          subtitle,
-          style: const TextStyle(color: Colors.white70),
-        ),
+        subtitle: Text(subtitle, style: const TextStyle(color: Colors.white70)),
       ),
     );
   }
@@ -989,7 +1109,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
   @override
   Widget build(BuildContext context) {
     final bool anyCallActive = _isInCall || _isInVoIPCall;
-    
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Theo Dõi An Toàn Lái Xe'),
@@ -1040,7 +1160,12 @@ class _MonitorScreenState extends State<MonitorScreen> {
           ),
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.only(left: 16.0, right: 16.0, top: 10.0, bottom: 8.0),
+              padding: const EdgeInsets.only(
+                left: 16.0,
+                right: 16.0,
+                top: 10.0,
+                bottom: 8.0,
+              ),
               child: Text(
                 'Lịch Sử Sự Kiện',
                 style: TextStyle(
@@ -1065,15 +1190,12 @@ class _MonitorScreenState extends State<MonitorScreen> {
                   ),
                 )
               : SliverList(
-                  delegate: SliverChildBuilderDelegate(
-                    (context, index) {
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12.0),
-                        child: _buildEventTile(_historyEvents[index]),
-                      );
-                    },
-                    childCount: _historyEvents.length,
-                  ),
+                  delegate: SliverChildBuilderDelegate((context, index) {
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12.0),
+                      child: _buildEventTile(_historyEvents[index]),
+                    );
+                  }, childCount: _historyEvents.length),
                 ),
         ],
       ),
