@@ -753,7 +753,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         return Date().timeIntervalSince(lastAlert) >= dangerAlertCooldown
     }
     
-    // 🎯 CẬP NHẬT HÀM HANDLE TILT DETECTION - THÊM 3 TÌNH HUỐNG CẢNH BÁO
+    // 🎯 CẬP NHẬT HÀM HANDLE TILT DETECTION - THÊM 4 TÌNH HUỐNG CẢNH BÁO
     private func handleTiltDetection(zValue: Double) {
         let tiltPercent = convertTiltToPercent(zValue)
         let tiltStatus = getTiltStatus(tiltPercent)
@@ -779,6 +779,15 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
                                           isInVoIPCall && 
                                           isZStable &&
                                           canSendVoIPAlert()
+        // 🆕 CẢNH BÁO 4: KHI CHỈ XEM ĐIỆN THOẠI (KHÔNG lướt web)
+        let shouldTriggerPhoneUsageAlert = isDeviceUnlocked && 
+                                        isDriving && 
+                                        isViewingPhone && 
+                                        isZStable && 
+                                        !isActiveBrowsing &&  // 🎯 KHÔNG lướt web
+                                        !isInCall &&          // 🎯 KHÔNG gọi điện
+                                        !isInVoIPCall &&      // 🎯 KHÔNG gọi Zalo
+                                        canSendDangerAlert()
         
         // KÍCH HOẠT CÁC CẢNH BÁO
         if shouldTriggerWebDangerAlert {
@@ -792,6 +801,10 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         if shouldTriggerVoIPDangerAlert {
             let callType = voipCallDetector?.getVoIPCallDuration() != nil ? "voip_active" : "voip_unknown"
             checkVoIPCallWhileDrivingAlert(callType: callType)
+        }
+
+        if shouldTriggerPhoneUsageAlert {
+            triggerPhoneUsageAlert(tiltPercent: tiltPercent, zValue: zValue)
         }
         
         let tiltTime = Date()
@@ -836,6 +849,33 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         )
         
         print("🚨 WEB DANGER ALERT: Driving + Phone Usage + Web Browsing! (Tilt: \(tiltPercent)%)")
+    }
+
+    private func triggerPhoneUsageAlert(tiltPercent: Double, zValue: Double) {
+        let dangerTime = Date()
+        lastDangerAlertTime = dangerTime
+        
+        let dangerData: [String: Any] = [
+            "type": "DANGER_EVENT",  // Dùng chung type để hiển thị cảnh báo đỏ
+            "message": "CẢNH BÁO NGUY HIỂM: Đang lái xe và SỬ DỤNG ĐIỆN THOẠI!",
+            "tiltValue": zValue,
+            "tiltPercent": tiltPercent,
+            "speed": currentSpeed,
+            "isNetworkActive": isNetworkActive,
+            "isActiveBrowsing": isActiveBrowsing,  // sẽ là false
+            "isInCall": isInCall,                  // sẽ là false  
+            "isVoIPCall": isInVoIPCall,            // sẽ là false
+            "zStability": zStability,
+            "timestamp": Int(dangerTime.timeIntervalSince1970 * 1000)
+        ]
+        
+        self.sendEventToFlutter(dangerData)
+        self.sendCriticalNotification(
+            title: "⚠️ CẢNH BÁO NGUY HIỂM!",
+            message: "Đang lái xe ở \(String(format: "%.1f", currentSpeed)) km/h và SỬ DỤNG ĐIỆN THOẠI!"
+        )
+        
+        print("📱 PHONE USAGE ALERT: Driving + Using Phone! Tilt: \(tiltPercent)%")
     }
     
     // MARK: - Lock/Unlock Observers
@@ -1044,17 +1084,20 @@ class RealNetworkMonitor {
         
         print("🌐 Traffic Diff - Received: \(receivedDiff), Sent: \(sentDiff), Packets: \(packetsDiff)")
         
-        // 🎯 NGƯỠNG THÔNG MINH - PHÙ HỢP WEB NHƯNG TRÁNH APP NỀN
-        let hasModerateDownload = receivedDiff > 80000    // 80KB - đủ cho web có ảnh
-        let hasModerateUpload = sentDiff > 30000          // 30KB - đủ cho form submit
-        let hasPacketActivity = packetsDiff > 20          // 20 packets - traffic đáng kể
+        // 🎯 NGƯỠNG THÔNG MINH
+        let hasModerateDownload = receivedDiff > 60000    // 60KB - web có ảnh
+        let hasLargeDownload = receivedDiff > 150000      // 🆕 150KB - video streaming
+        let hasModerateUpload = sentDiff > 30000          // 30KB
+        let hasPacketActivity = packetsDiff > 20          // 20 packets
+        let hasMinimalPackets = packetsDiff > 5           // 🆕 5 packets - cho video
         let hasActiveConnections = currentStats.activeConnections > 3
         
-        // 🎯 KẾT HỢP NHIỀU YẾU TỐ ĐỂ TRÁNH BÁO ẢO
+        // 🎯 KẾT HỢP NHIỀU YẾU TỐ - THÊM ĐIỀU KIỆN VIDEO
         let isActive = (hasModerateDownload && hasPacketActivity) || 
-                      (hasModerateUpload && hasPacketActivity) ||
-                      (hasActiveConnections && hasModerateDownload) ||
-                      (receivedDiff > 50000 && packetsDiff > 25) // Web nhẹ nhưng nhiều request
+                    (hasModerateUpload && hasPacketActivity) ||
+                    (hasActiveConnections && hasModerateDownload) ||
+                    (receivedDiff > 50000 && packetsDiff > 20) || // Web nhẹ
+                    (hasLargeDownload && hasMinimalPackets)       // 🆕 VIDEO STREAMING!
         
         print("🌐 Network Activity Result: \(isActive) - Consecutive: \(consecutiveActiveCount)")
         return isActive
@@ -1065,8 +1108,14 @@ class RealNetworkMonitor {
         
         let receivedDiff = currentStats.bytesReceived - lastStats.bytesReceived
         let sentDiff = currentStats.bytesSent - lastStats.bytesSent
+        let packetsDiff = currentStats.packetsReceived - lastStats.packetsReceived
         
-        if receivedDiff > 150000 {
+        // 🆕 KIỂM TRA VIDEO STREAMING ĐẶC BIỆT
+        let isLikelyVideoStreaming = receivedDiff > 150000 && packetsDiff > 5
+        
+        if isLikelyVideoStreaming {
+            return "Xem video trực tuyến (YouTube/Netflix)"
+        } else if receivedDiff > 150000 {
             return "Tải dữ liệu lớn (video/file)"
         } else if receivedDiff > 80000 {
             return "Đang xem web có ảnh"
