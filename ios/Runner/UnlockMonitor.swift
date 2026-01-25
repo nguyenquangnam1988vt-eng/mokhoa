@@ -61,19 +61,16 @@ class CallDetectorManager: NSObject {
     }
 }
 
-// 🎯 CLASS VOIP CALL DETECTOR CHO ZALO/FACEBOOK - CẬP NHẬT
+// 🎯 CLASS VOIP CALL DETECTOR CHO ZALO/FACEBOOK
 class VoIPCallDetector: NSObject {
     private let audioSession = AVAudioSession.sharedInstance()
     private var isInVoIPCall = false
     private var voipCallStartTime: Date?
     private var lastAudioRoute: String = ""
-    private var isMonitoring = false
     
     var onVoIPCallStateChanged: ((Bool, String) -> Void)?
     
     func startMonitoring() {
-        guard !isMonitoring else { return }
-        
         // Lắng nghe thay đổi audio route
         NotificationCenter.default.addObserver(self,
             selector: #selector(audioRouteChanged),
@@ -86,16 +83,11 @@ class VoIPCallDetector: NSObject {
             name: AVAudioSession.interruptionNotification,
             object: nil)
         
-        isMonitoring = true
         print("📱 VoIP Call Detector started")
     }
     
     func stopMonitoring() {
-        guard isMonitoring else { return }
-        
         NotificationCenter.default.removeObserver(self)
-        isMonitoring = false
-        print("📱 VoIP Call Detector stopped")
     }
     
     @objc private func audioRouteChanged(notification: Notification) {
@@ -120,8 +112,6 @@ class VoIPCallDetector: NSObject {
     }
     
     private func checkCurrentAudioState() {
-        guard isMonitoring else { return }
-        
         let currentRoute = audioSession.currentRoute
         
         // 🎯 PHÁT HIỆN CUỘC GỌI VoIP DỰA TRÊN AUDIO ROUTE
@@ -154,8 +144,6 @@ class VoIPCallDetector: NSObject {
     }
     
     private func handleVoIPCallStarted() {
-        guard !isInVoIPCall else { return }
-        
         isInVoIPCall = true
         voipCallStartTime = Date()
         
@@ -166,8 +154,6 @@ class VoIPCallDetector: NSObject {
     }
     
     private func handleVoIPCallEnded() {
-        guard isInVoIPCall else { return }
-        
         isInVoIPCall = false
         voipCallStartTime = nil
         onVoIPCallStateChanged?(false, "ended")
@@ -205,194 +191,6 @@ class VoIPCallDetector: NSObject {
     }
 }
 
-// 🎯 REAL NETWORK MONITOR VỚI NGƯỠNG THÔNG MINH
-class RealNetworkMonitor {
-    private var timer: Timer?
-    private var lastNetworkStats: NetworkInterfaceStats?
-    private var activitySamples: [Bool] = []
-    private let sampleSize = 5
-    private var consecutiveActiveCount = 0
-    
-    var onNetworkActivityDetected: ((Bool, String) -> Void)?
-    
-    func startMonitoring() {
-        stopMonitoring()
-        
-        timer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
-            self?.checkRealNetworkActivity()
-        }
-        
-        if let timer = timer {
-            RunLoop.current.add(timer, forMode: .common)
-        }
-        
-        print("🌐 Real Network Monitor started")
-    }
-    
-    func stopMonitoring() {
-        timer?.invalidate()
-        timer = nil
-    }
-    
-    func notifyLocationUpdate() {
-        // Không cần cooldown
-    }
-    
-    private func checkRealNetworkActivity() {
-        let currentStats = getCurrentNetworkStats()
-        let isActive = detectRealNetworkActivity(currentStats: currentStats)
-        let activityType = determineActivityType(currentStats: currentStats)
-        
-        // 🎯 LOGIC XÁC NHẬN THÔNG MINH
-        if isActive {
-            consecutiveActiveCount += 1
-        } else {
-            consecutiveActiveCount = max(0, consecutiveActiveCount - 1)
-        }
-        
-        // 🎯 CHỈ XÁC NHẬN KHI CÓ 3 LẦN ACTIVE LIÊN TIẾP
-        let confirmedActive = consecutiveActiveCount >= 3
-        
-        DispatchQueue.main.async {
-            self.onNetworkActivityDetected?(confirmedActive, activityType)
-        }
-        
-        lastNetworkStats = currentStats
-    }
-    
-    private func getCurrentNetworkStats() -> NetworkInterfaceStats {
-        var stats = NetworkInterfaceStats()
-        
-        if let interfaceStats = getNetworkInterfaceStatistics() {
-            stats.bytesReceived = interfaceStats.bytesReceived
-            stats.bytesSent = interfaceStats.bytesSent
-            stats.packetsReceived = interfaceStats.packetsReceived
-            stats.hasActiveInterface = true
-        }
-        
-        stats.activeConnections = getActiveURLSessionTasks()
-        
-        return stats
-    }
-    
-    private func detectRealNetworkActivity(currentStats: NetworkInterfaceStats) -> Bool {
-        guard let lastStats = lastNetworkStats else { return false }
-        
-        let receivedDiff = currentStats.bytesReceived - lastStats.bytesReceived
-        let sentDiff = currentStats.bytesSent - lastStats.bytesSent
-        let packetsDiff = currentStats.packetsReceived - lastStats.packetsReceived
-        
-        print("🌐 Traffic Diff - Received: \(receivedDiff), Sent: \(sentDiff), Packets: \(packetsDiff)")
-        
-        // 🎯 NGƯỠNG THÔNG MINH - PHÙ HỢP WEB NHƯNG TRÁNH APP NỀN
-        let hasModerateDownload = receivedDiff > 80000    // 80KB - đủ cho web có ảnh
-        let hasModerateUpload = sentDiff > 30000          // 30KB - đủ cho form submit
-        let hasPacketActivity = packetsDiff > 20          // 20 packets - traffic đáng kể
-        let hasActiveConnections = currentStats.activeConnections > 3
-        
-        // 🎯 KẾT HỢP NHIỀU YẾU TỐ ĐỂ TRÁNH BÁO ẢO
-        let isActive = (hasModerateDownload && hasPacketActivity) || 
-                      (hasModerateUpload && hasPacketActivity) ||
-                      (hasActiveConnections && hasModerateDownload) ||
-                      (receivedDiff > 50000 && packetsDiff > 25) // Web nhẹ nhưng nhiều request
-        
-        print("🌐 Network Activity Result: \(isActive) - Consecutive: \(consecutiveActiveCount)")
-        return isActive
-    }
-    
-    private func determineActivityType(currentStats: NetworkInterfaceStats) -> String {
-        guard let lastStats = lastNetworkStats else { return "Không có dữ liệu" }
-        
-        let receivedDiff = currentStats.bytesReceived - lastStats.bytesReceived
-        let sentDiff = currentStats.bytesSent - lastStats.bytesSent
-        
-        if receivedDiff > 150000 {
-            return "Tải dữ liệu lớn (video/file)"
-        } else if receivedDiff > 80000 {
-            return "Đang xem web có ảnh"
-        } else if receivedDiff > 50000 {
-            return "Đang lướt web"
-        } else if sentDiff > 30000 {
-            return "Đang upload/gửi dữ liệu"
-        } else {
-            return "Hoạt động mạng nhẹ"
-        }
-    }
-    
-    private func getNetworkInterfaceStatistics() -> (bytesReceived: Int, bytesSent: Int, packetsReceived: Int)? {
-        var ifaddrs: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&ifaddrs) == 0 else { return nil }
-        
-        defer { freeifaddrs(ifaddrs) }
-        
-        var totalReceived: Int = 0
-        var totalSent: Int = 0
-        var totalPackets: Int = 0
-        
-        var pointer = ifaddrs
-        while pointer != nil {
-            defer { pointer = pointer?.pointee.ifa_next }
-            
-            guard let interface = pointer?.pointee else { continue }
-            let name = String(cString: interface.ifa_name)
-            
-            if name.hasPrefix("en") || name.hasPrefix("pdp_ip") {
-                if let data = interface.ifa_data {
-                    let stats = data.withMemoryRebound(to: if_data.self, capacity: 1) { $0.pointee }
-                    totalReceived += Int(stats.ifi_ibytes)
-                    totalSent += Int(stats.ifi_obytes)
-                    totalPackets += Int(stats.ifi_ipackets)
-                }
-            }
-        }
-        
-        return (totalReceived, totalSent, totalPackets)
-    }
-    
-    private func getActiveURLSessionTasks() -> Int {
-        return 0
-    }
-}
-
-struct NetworkInterfaceStats {
-    var bytesReceived: Int = 0
-    var bytesSent: Int = 0
-    var packetsReceived: Int = 0
-    var hasActiveInterface: Bool = false
-    var activeConnections: Int = 0
-}
-
-// 🎯 NETWORK CONGESTION DETECTOR
-class NetworkCongestionDetector {
-    private var pingTimer: Timer?
-    
-    var onNetworkStatusUpdate: ((Bool) -> Void)?
-    
-    func startMonitoring() {
-        stopMonitoring()
-        
-        pingTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
-            self?.performNetworkAnalysis()
-        }
-    }
-    
-    func stopMonitoring() {
-        pingTimer?.invalidate()
-        pingTimer = nil
-    }
-    
-    func setLocationUpdateCooldown() {
-        // Không cần cooldown
-    }
-    
-    private func performNetworkAnalysis() {
-        // Đơn giản hóa, chủ yếu dựa vào RealNetworkMonitor
-        DispatchQueue.main.async {
-            self.onNetworkStatusUpdate?(false)
-        }
-    }
-}
-
 @objcMembers
 class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
     
@@ -416,24 +214,19 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
     private var speedUpdateTimer: Timer?
     private var lastSpeedUpdateTime: Date = Date()
     
-    // 🎯 THÊM CALL DETECTION - CẬP NHẬT QUAN TRỌNG
+    // 🎯 THÊM CALL DETECTION
     private var callDetector: CallDetectorManager?
     private var isInCall = false
     private var callStartTime: Date?
     private var lastCallAlertTime: Date?
-    private let callAlertCooldown: TimeInterval = 10.0
+    private let callAlertCooldown: TimeInterval = 10.0 // 10 giây giữa các cảnh báo call
     
-    // 📞 THÊM VOIP DETECTION - CẬP NHẬT QUAN TRỌNG
+    // 📞 THÊM VOIP DETECTION
     private var voipCallDetector: VoIPCallDetector?
     private var isInVoIPCall = false
     private var voipCallStartTime: Date?
     private var lastVoIPAlertTime: Date?
-    private let voipAlertCooldown: TimeInterval = 10.0
-    
-    // 🚨 BIẾN MỚI: PHÂN BIỆT LOẠI CUỘC GỌI
-    private var currentActiveCallType: String = "none" // "cellular", "voip", "none"
-    private var callDetectionCooldown: TimeInterval = 2.0
-    private var lastCallDetectionTime: Date = Date()
+    private let voipAlertCooldown: TimeInterval = 10.0 // 10 giây giữa các cảnh báo VoIP
     
     // Ngưỡng
     private let drivingSpeedThreshold: Double = 10.0 // km/h
@@ -455,20 +248,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         setupRealNetworkMonitoring()
         setupSpeedUpdateTimer()
         setupCallDetection()
-        setupVoIPDetection()
-        
-        // 🎯 THÊM OBSERVER ĐỂ XỬ LÝ APP STATE
-        NotificationCenter.default.addObserver(self,
-            selector: #selector(appDidBecomeActive),
-            name: UIApplication.didBecomeActiveNotification,
-            object: nil)
-    }
-    
-    @objc private func appDidBecomeActive() {
-        // 🎯 RESET CALL STATE KHI APP ACTIVE LẠI
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            self.resetCallState()
-        }
+        setupVoIPDetection() // 🎯 THÊM DÒNG NÀY
     }
     
     // MARK: - FlutterStreamHandler Methods
@@ -495,7 +275,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         networkCongestionDetector?.startMonitoring()
         realNetworkMonitor?.startMonitoring()
         callDetector?.startMonitoring()
-        voipCallDetector?.startMonitoring()
+        voipCallDetector?.startMonitoring() // 🎯 THÊM DÒNG NÀY
         
         print("Unlock Monitor: Đã đăng ký và bắt đầu theo dõi (bao gồm call + VoIP detection).")
     }
@@ -507,111 +287,25 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         networkCongestionDetector?.stopMonitoring()
         realNetworkMonitor?.stopMonitoring()
         callDetector = nil
-        voipCallDetector?.stopMonitoring()
+        voipCallDetector?.stopMonitoring() // 🎯 THÊM DÒNG NÀY
         voipCallDetector = nil
         speedUpdateTimer?.invalidate()
         NotificationCenter.default.removeObserver(self)
     }
     
-    // 🎯 PHƯƠNG THỨC MỚI: RESET CALL STATE
-    private func resetCallState() {
-        isInCall = false
-        isInVoIPCall = false
-        currentActiveCallType = "none"
-        callStartTime = nil
-        voipCallStartTime = nil
-        
-        // 🎯 KHỞI ĐỘNG LẠI VOIP DETECTOR
-        voipCallDetector?.startMonitoring()
-        
-        print("🔄 Call state đã được reset")
-    }
-    
-    // 🎯 CẬP NHẬT CALL DETECTION VỚI LOGIC PHÂN BIỆT
-    private func setupCallDetection() {
-        callDetector = CallDetectorManager()
-        callDetector?.onCallStateChanged = { [weak self] isInCall, state in
-            guard let self = self else { return }
-            
-            // 🚨 KIỂM TRA COOLDOWN ĐỂ TRÁNH XUNG ĐỘT
-            guard Date().timeIntervalSince(self.lastCallDetectionTime) >= self.callDetectionCooldown else {
-                print("📞 Call detection in cooldown, skipping cellular call event")
-                return
-            }
-            
-            let wasInCall = self.isInCall
-            self.isInCall = isInCall
-            
-            if isInCall {
-                self.callStartTime = Date()
-                self.currentActiveCallType = "cellular" // 🎯 XÁC ĐỊNH LÀ CUỘC GỌI DI ĐỘNG
-                self.lastCallDetectionTime = Date()
-                
-                // 🚨 TẮT VOIP DETECTION TẠM THỜI KHI CÓ CUỘC GỌI DI ĐỘNG
-                self.voipCallDetector?.stopMonitoring()
-                print("📞 Cellular call detected - VoIP monitoring disabled")
-            } else {
-                self.callStartTime = nil
-                self.currentActiveCallType = "none"
-                
-                // 🎯 KHỞI ĐỘNG LẠI VOIP DETECTION KHI CUỘC GỌI KẾT THÚC
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                    self.voipCallDetector?.startMonitoring()
-                    print("📞 Cellular call ended - VoIP monitoring re-enabled")
-                }
-            }
-            
-            // Gửi sự kiện call state tới Flutter
-            let callTime = Date()
-            let callData: [String: Any] = [
-                "type": "CALL_EVENT",
-                "message": isInCall ? "Đang trong cuộc gọi điện thoại" : "Đã kết thúc cuộc gọi",
-                "isInCall": isInCall,
-                "callState": state,
-                "callDuration": self.getCallDuration() ?? 0,
-                "timestamp": Int(callTime.timeIntervalSince1970 * 1000)
-            ]
-            
-            self.sendEventToFlutter(callData)
-            print("📞 Call State Changed: \(isInCall ? "IN_CALL" : "END_CALL") - State: \(state)")
-            
-            // 🚨 KIỂM TRA CẢNH BÁO NẾU ĐANG LÁI XE
-            if isInCall && self.isDriving && !wasInCall {
-                self.checkCallWhileDrivingAlert()
-            }
-        }
-        
-        callDetector?.startMonitoring()
-    }
-    
-    // 🎯 CẬP NHẬT VOIP DETECTION VỚI LOGIC PHÂN BIỆT
+    // 🎯 THÊM PHƯƠNG THỨC VOIP DETECTION
     private func setupVoIPDetection() {
         voipCallDetector = VoIPCallDetector()
         voipCallDetector?.onVoIPCallStateChanged = { [weak self] isInCall, callType in
             guard let self = self else { return }
-            
-            // 🚨 QUAN TRỌNG: KIỂM TRA XEM ĐANG CÓ CUỘC GỌI DI ĐỘNG KHÔNG
-            guard self.currentActiveCallType != "cellular" else {
-                print("📱 Đang có cuộc gọi di động, bỏ qua VoIP detection")
-                return
-            }
-            
-            // 🚨 KIỂM TRA COOLDOWN
-            guard Date().timeIntervalSince(self.lastCallDetectionTime) >= self.callDetectionCooldown else {
-                print("📱 VoIP detection in cooldown, skipping event")
-                return
-            }
             
             let wasInVoIPCall = self.isInVoIPCall
             self.isInVoIPCall = isInCall
             
             if isInCall {
                 self.voipCallStartTime = Date()
-                self.currentActiveCallType = "voip" // 🎯 XÁC ĐỊNH LÀ CUỘC GỌI VoIP
-                self.lastCallDetectionTime = Date()
             } else {
                 self.voipCallStartTime = nil
-                self.currentActiveCallType = "none"
             }
             
             // Gửi sự kiện VoIP call state tới Flutter
@@ -636,6 +330,44 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         }
         
         voipCallDetector?.startMonitoring()
+    }
+    
+    // 🎯 THÊM PHƯƠNG THỨC CALL DETECTION
+    private func setupCallDetection() {
+        callDetector = CallDetectorManager()
+        callDetector?.onCallStateChanged = { [weak self] isInCall, state in
+            guard let self = self else { return }
+            
+            let wasInCall = self.isInCall
+            self.isInCall = isInCall
+            
+            if isInCall {
+                self.callStartTime = Date()
+            } else {
+                self.callStartTime = nil
+            }
+            
+            // Gửi sự kiện call state tới Flutter
+            let callTime = Date()
+            let callData: [String: Any] = [
+                "type": "CALL_EVENT",
+                "message": isInCall ? "Đang trong cuộc gọi điện thoại" : "Đã kết thúc cuộc gọi",
+                "isInCall": isInCall,
+                "callState": state,
+                "callDuration": self.getCallDuration() ?? 0,
+                "timestamp": Int(callTime.timeIntervalSince1970 * 1000)
+            ]
+            
+            self.sendEventToFlutter(callData)
+            print("📞 Call State Changed: \(isInCall ? "IN_CALL" : "END_CALL") - State: \(state)")
+            
+            // 🚨 KIỂM TRA CẢNH BÁO NẾU ĐANG LÁI XE VÀ BẮT ĐẦU CUỘC GỌI
+            if isInCall && self.isDriving && !wasInCall {
+                self.checkCallWhileDrivingAlert()
+            }
+        }
+        
+        callDetector?.startMonitoring()
     }
     
     private func getCallDuration() -> TimeInterval? {
@@ -941,7 +673,7 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
             print("🎯 Driving status: \(isDriving ? "DRIVING" : "STOPPED") at \(currentSpeed) km/h")
             
             // 🚨 KIỂM TRA CẢNH BÁO NẾU BẮT ĐẦU LÁI XE KHI ĐANG NGHE ĐIỆN THOẠI
-            if isDriving && !wasDriving {
+            if isDriving && !wasDriving && (isInCall || isInVoIPCall) {
                 if isInCall {
                     checkCallWhileDrivingAlert()
                 }
@@ -1230,5 +962,193 @@ class UnlockMonitor: NSObject, CLLocationManagerDelegate, FlutterStreamHandler {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss"
         return formatter.string(from: date)
+    }
+}
+
+// 🎯 REAL NETWORK MONITOR VỚI NGƯỠNG THÔNG MINH
+class RealNetworkMonitor {
+    private var timer: Timer?
+    private var lastNetworkStats: NetworkInterfaceStats?
+    private var activitySamples: [Bool] = []
+    private let sampleSize = 5
+    private var consecutiveActiveCount = 0
+    
+    var onNetworkActivityDetected: ((Bool, String) -> Void)?
+    
+    func startMonitoring() {
+        stopMonitoring()
+        
+        timer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+            self?.checkRealNetworkActivity()
+        }
+        
+        if let timer = timer {
+            RunLoop.current.add(timer, forMode: .common)
+        }
+        
+        print("🌐 Real Network Monitor started")
+    }
+    
+    func stopMonitoring() {
+        timer?.invalidate()
+        timer = nil
+    }
+    
+    func notifyLocationUpdate() {
+        // Không cần cooldown
+    }
+    
+    private func checkRealNetworkActivity() {
+        let currentStats = getCurrentNetworkStats()
+        let isActive = detectRealNetworkActivity(currentStats: currentStats)
+        let activityType = determineActivityType(currentStats: currentStats)
+        
+        // 🎯 LOGIC XÁC NHẬN THÔNG MINH
+        if isActive {
+            consecutiveActiveCount += 1
+        } else {
+            consecutiveActiveCount = max(0, consecutiveActiveCount - 1)
+        }
+        
+        // 🎯 CHỈ XÁC NHẬN KHI CÓ 3 LẦN ACTIVE LIÊN TIẾP
+        let confirmedActive = consecutiveActiveCount >= 3
+        
+        DispatchQueue.main.async {
+            self.onNetworkActivityDetected?(confirmedActive, activityType)
+        }
+        
+        lastNetworkStats = currentStats
+    }
+    
+    private func getCurrentNetworkStats() -> NetworkInterfaceStats {
+        var stats = NetworkInterfaceStats()
+        
+        if let interfaceStats = getNetworkInterfaceStatistics() {
+            stats.bytesReceived = interfaceStats.bytesReceived
+            stats.bytesSent = interfaceStats.bytesSent
+            stats.packetsReceived = interfaceStats.packetsReceived
+            stats.hasActiveInterface = true
+        }
+        
+        stats.activeConnections = getActiveURLSessionTasks()
+        
+        return stats
+    }
+    
+    private func detectRealNetworkActivity(currentStats: NetworkInterfaceStats) -> Bool {
+        guard let lastStats = lastNetworkStats else { return false }
+        
+        let receivedDiff = currentStats.bytesReceived - lastStats.bytesReceived
+        let sentDiff = currentStats.bytesSent - lastStats.bytesSent
+        let packetsDiff = currentStats.packetsReceived - lastStats.packetsReceived
+        
+        print("🌐 Traffic Diff - Received: \(receivedDiff), Sent: \(sentDiff), Packets: \(packetsDiff)")
+        
+        // 🎯 NGƯỠNG THÔNG MINH - PHÙ HỢP WEB NHƯNG TRÁNH APP NỀN
+        let hasModerateDownload = receivedDiff > 80000    // 80KB - đủ cho web có ảnh
+        let hasModerateUpload = sentDiff > 30000          // 30KB - đủ cho form submit
+        let hasPacketActivity = packetsDiff > 20          // 20 packets - traffic đáng kể
+        let hasActiveConnections = currentStats.activeConnections > 3
+        
+        // 🎯 KẾT HỢP NHIỀU YẾU TỐ ĐỂ TRÁNH BÁO ẢO
+        let isActive = (hasModerateDownload && hasPacketActivity) || 
+                      (hasModerateUpload && hasPacketActivity) ||
+                      (hasActiveConnections && hasModerateDownload) ||
+                      (receivedDiff > 50000 && packetsDiff > 25) // Web nhẹ nhưng nhiều request
+        
+        print("🌐 Network Activity Result: \(isActive) - Consecutive: \(consecutiveActiveCount)")
+        return isActive
+    }
+    
+    private func determineActivityType(currentStats: NetworkInterfaceStats) -> String {
+        guard let lastStats = lastNetworkStats else { return "Không có dữ liệu" }
+        
+        let receivedDiff = currentStats.bytesReceived - lastStats.bytesReceived
+        let sentDiff = currentStats.bytesSent - lastStats.bytesSent
+        
+        if receivedDiff > 150000 {
+            return "Tải dữ liệu lớn (video/file)"
+        } else if receivedDiff > 80000 {
+            return "Đang xem web có ảnh"
+        } else if receivedDiff > 50000 {
+            return "Đang lướt web"
+        } else if sentDiff > 30000 {
+            return "Đang upload/gửi dữ liệu"
+        } else {
+            return "Hoạt động mạng nhẹ"
+        }
+    }
+    
+    private func getNetworkInterfaceStatistics() -> (bytesReceived: Int, bytesSent: Int, packetsReceived: Int)? {
+        var ifaddrs: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddrs) == 0 else { return nil }
+        
+        defer { freeifaddrs(ifaddrs) }
+        
+        var totalReceived: Int = 0
+        var totalSent: Int = 0
+        var totalPackets: Int = 0
+        
+        var pointer = ifaddrs
+        while pointer != nil {
+            defer { pointer = pointer?.pointee.ifa_next }
+            
+            guard let interface = pointer?.pointee else { continue }
+            let name = String(cString: interface.ifa_name)
+            
+            if name.hasPrefix("en") || name.hasPrefix("pdp_ip") {
+                if let data = interface.ifa_data {
+                    let stats = data.withMemoryRebound(to: if_data.self, capacity: 1) { $0.pointee }
+                    totalReceived += Int(stats.ifi_ibytes)
+                    totalSent += Int(stats.ifi_obytes)
+                    totalPackets += Int(stats.ifi_ipackets)
+                }
+            }
+        }
+        
+        return (totalReceived, totalSent, totalPackets)
+    }
+    
+    private func getActiveURLSessionTasks() -> Int {
+        return 0
+    }
+}
+
+struct NetworkInterfaceStats {
+    var bytesReceived: Int = 0
+    var bytesSent: Int = 0
+    var packetsReceived: Int = 0
+    var hasActiveInterface: Bool = false
+    var activeConnections: Int = 0
+}
+
+// 🎯 NETWORK CONGESTION DETECTOR
+class NetworkCongestionDetector {
+    private var pingTimer: Timer?
+    
+    var onNetworkStatusUpdate: ((Bool) -> Void)?
+    
+    func startMonitoring() {
+        stopMonitoring()
+        
+        pingTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            self?.performNetworkAnalysis()
+        }
+    }
+    
+    func stopMonitoring() {
+        pingTimer?.invalidate()
+        pingTimer = nil
+    }
+    
+    func setLocationUpdateCooldown() {
+        // Không cần cooldown
+    }
+    
+    private func performNetworkAnalysis() {
+        // Đơn giản hóa, chủ yếu dựa vào RealNetworkMonitor
+        DispatchQueue.main.async {
+            self.onNetworkStatusUpdate?(false)
+        }
     }
 }
